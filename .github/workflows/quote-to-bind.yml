@@ -39,7 +39,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - name: Correlation
-        run: echo "Helio execution id: ${{ github.event.inputs.bny_execution_id || 'n/a' }}"
+        run: |
+          echo "Helio execution id ${{ github.event.inputs.bny_execution_id || 'n/a' }}"
       - name: Build
         run: |
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
