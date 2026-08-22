@@ -1,0 +1,1 @@
+{"name":"marine-cargo-quote-bind","version":"3.4.2","private":true,"scripts":{"test":"node src/quote.test.js"}}
