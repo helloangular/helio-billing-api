@@ -18,6 +18,14 @@ on:
         description: Helio release version being orchestrated
         required: false
         default: v3.4.2
+      bny_execution_id:
+        # Helio will not dispatch a workflow it cannot correlate to the exact
+        # run it creates — without this input the stage blocks with
+        # github_actions_managed_contract_required rather than risk attributing
+        # an unrelated run to this release.
+        description: Helio stage execution correlation id
+        required: false
+        default: ''
 
 env:
   RELEASE_VERSION: ${{ github.event.inputs.release_version || 'v3.4.2' }}
@@ -30,6 +38,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
+      - name: Correlation
+        run: echo "Helio execution id: ${{ github.event.inputs.bny_execution_id || 'n/a' }}"
       - name: Build
         run: |
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
