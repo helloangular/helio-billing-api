@@ -9,6 +9,15 @@
 # represents the whole pipeline rather than only its automated parts.
 name: Marine Cargo Quote-to-Bind
 
+# Helio correlates a dispatched stage to the exact run it created by matching
+# this run-name against the bny_execution_id it passed in. It deliberately
+# never falls back to "newest run" -- concurrent dispatches would make that
+# ambiguous and could bind one release to another release's deployment -- so
+# without this line every dispatched stage stalls at
+# github_actions_run_pending. On push there is no input, so fall back to a
+# human-readable title.
+run-name: ${{ inputs.bny_execution_id || format('Marine Cargo Quote-to-Bind - {0}', github.sha) }}
+
 on:
   push:
     branches: [main]
