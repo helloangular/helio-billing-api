@@ -27,6 +27,26 @@ on:
         description: Helio release version being orchestrated
         required: false
         default: v3.4.2
+      # Helio's managed ROLLBACK contract dispatches this same workflow with the
+      # inputs below. workflow_dispatch rejects any input it does not declare
+      # ("Unexpected inputs provided"), so a workflow used as a rollback target
+      # must declare all of them or the rollback-deploy stage fails at dispatch.
+      artifact_digest:
+        description: Immutable sha256 digest to (re)deploy
+        required: false
+        default: ''
+      workflow_revision:
+        description: Commit SHA this deployment workflow is pinned to
+        required: false
+        default: ''
+      deployment_only:
+        description: >-
+          "true" when Helio is redeploying an already-built artifact (rollback).
+          A real deployment workflow should skip build/test and deploy the
+          digest as-is; rebuilding would defeat the point of rolling back to a
+          known-good immutable artifact.
+        required: false
+        default: 'false'
       bny_execution_id:
         # Helio will not dispatch a workflow it cannot correlate to the exact
         # run it creates — without this input the stage blocks with
