@@ -61,12 +61,20 @@ on:
         description: Helio release UUID
         required: false
         default: ''
+      bny_stage_id:
+        # Every Helio automatic stage dispatches this workflow independently.
+        # Job guards below ensure that one dispatch can execute only the stage
+        # named by the immutable release plan.
+        description: Immutable Helio logical stage id to execute
+        required: false
+        default: ''
 
 # Publishing deployment evidence is a write. Helio reads that record back as
 # the provider-authored proof that this run deployed this artifact; without the
 # permission the API call 403s and the stage stays unproven.
 permissions:
   contents: read
+  actions: read
   deployments: write
 
 env:
@@ -75,6 +83,7 @@ env:
 jobs:
   build-and-package:
     name: Build & Package
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bny_stage_id == 'build-and-package' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +97,7 @@ jobs:
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
           mkdir -p dist && cp -r src package.json dist/
       - name: Package
-        run: tar czf quote-to-bind-$RELEASE_VERSION.tgz dist
+        run: tar czf "quote-to-bind-$RELEASE_VERSION.tgz" dist
       - name: Record artifact digest
         id: digest
         run: |
@@ -96,16 +105,18 @@ jobs:
           # The digest is computed from the archive this job just produced. It
           # is the identity the release is bound to; anything downstream that
           # cannot name it has not proven what it deployed.
-          echo "artifact_digest=sha256:$(sha256sum quote-to-bind-$RELEASE_VERSION.tgz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          digest="$(sha256sum "quote-to-bind-$RELEASE_VERSION.tgz" | cut -d' ' -f1)"
+          echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: package
+          name: package-${{ inputs.bny_release_id || github.run_id }}
           path: quote-to-bind-*.tgz
     outputs:
       artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
 
   unit-tests:
     name: Unit Tests
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'unit-tests') }}
     needs: build-and-package
     runs-on: ubuntu-latest
     steps:
@@ -116,6 +127,7 @@ jobs:
 
   sast-scan:
     name: SAST Scan
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sast-scan') }}
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -130,6 +142,7 @@ jobs:
 
   sca-dependency:
     name: SCA / Dependency
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sca-dependency') }}
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -142,6 +155,7 @@ jobs:
 
   security-gate:
     name: Security Gate
+    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: [sast-scan, sca-dependency]
     runs-on: ubuntu-latest
     steps:
@@ -150,6 +164,7 @@ jobs:
 
   deploy-to-test:
     name: Deploy to Test
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-test') }}
     needs: security-gate
     runs-on: ubuntu-latest
     environment: test
@@ -158,6 +173,7 @@ jobs:
 
   qa-automated-tests:
     name: QA Automated Tests
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'qa-automated-tests') }}
     needs: deploy-to-test
     runs-on: ubuntu-latest
     steps:
@@ -168,6 +184,7 @@ jobs:
 
   cab-approval:
     name: CAB Approval
+    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: qa-automated-tests
     runs-on: ubuntu-latest
     steps:
@@ -176,6 +193,7 @@ jobs:
 
   deploy-to-uat:
     name: Deploy to UAT
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-uat') }}
     needs: cab-approval
     runs-on: ubuntu-latest
     environment: uat
@@ -184,6 +202,7 @@ jobs:
 
   policy-evaluation:
     name: Policy Evaluation
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'policy-evaluation') }}
     needs: deploy-to-uat
     runs-on: ubuntu-latest
     steps:
@@ -195,6 +214,7 @@ jobs:
 
   app-owner-signoff:
     name: App Owner Sign-off
+    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: policy-evaluation
     runs-on: ubuntu-latest
     steps:
@@ -203,6 +223,7 @@ jobs:
 
   deploy-to-preprod:
     name: Deploy to PreProd
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-preprod') }}
     needs: app-owner-signoff
     runs-on: ubuntu-latest
     environment: preprod
@@ -211,6 +232,7 @@ jobs:
 
   smoke-and-perf-tests:
     name: Smoke + Perf Tests
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'smoke-and-perf-tests') }}
     needs: deploy-to-preprod
     runs-on: ubuntu-latest
     steps:
@@ -221,6 +243,7 @@ jobs:
 
   prod-release-gate:
     name: Prod Release Gate
+    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: smoke-and-perf-tests
     runs-on: ubuntu-latest
     steps:
@@ -229,11 +252,42 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true')) }}
     needs: [prod-release-gate, build-and-package]
     runs-on: ubuntu-latest
     environment: production
     steps:
       - run: echo "Canary deploying $RELEASE_VERSION to PRODUCTION"
+
+      - name: Resolve immutable release artifact
+        id: artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
+          INPUT_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_ARTIFACT_DIGEST" ]]; then
+            digest="$INPUT_ARTIFACT_DIGEST"
+            uri="quote-to-bind-rollback@$digest"
+          else
+            [[ "$BNY_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+            artifact_name="package-$BNY_RELEASE_ID"
+            artifact_id="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
+              --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | last | .id // empty')"
+            [[ -n "$artifact_id" ]]
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > package.zip
+            unzip -q package.zip -d package-evidence
+            package_path="$(find package-evidence -type f -name 'quote-to-bind-*.tgz' | head -n 1)"
+            [[ -n "$package_path" ]]
+            digest="sha256:$(sha256sum "$package_path" | cut -d' ' -f1)"
+            uri="quote-to-bind-${RELEASE_VERSION}.tgz@$digest"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "artifact_digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "artifact_uri=$uri" >> "$GITHUB_OUTPUT"
 
       # Provider-authored, immutable record of what was deployed. Helio reads
       # this back rather than trusting its own dispatch: the deployment exists
@@ -247,7 +301,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BNY_EXECUTION_ID: ${{ inputs.bny_execution_id }}
           BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
-          ARTIFACT_DIGEST: ${{ inputs.artifact_digest != '' && inputs.artifact_digest || needs.build-and-package.outputs.artifact_digest }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          ARTIFACT_URI: ${{ steps.artifact.outputs.artifact_uri }}
           ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind.yml
           WORKFLOW_REVISION: ${{ github.sha }}
         run: |
@@ -264,7 +319,7 @@ jobs:
             --arg ref "$GITHUB_SHA" \
             --arg execution_id "$BNY_EXECUTION_ID" \
             --arg release_id "$BNY_RELEASE_ID" \
-            --arg artifact_uri "quote-to-bind-${RELEASE_VERSION}.tgz@$ARTIFACT_DIGEST" \
+            --arg artifact_uri "$ARTIFACT_URI" \
             --arg artifact_digest "$ARTIFACT_DIGEST" \
             --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
             --arg workflow_revision "$WORKFLOW_REVISION" \
@@ -284,6 +339,7 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
+    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify') }}
     needs: deploy-to-prod
     runs-on: ubuntu-latest
     steps:
