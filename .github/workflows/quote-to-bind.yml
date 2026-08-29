@@ -55,6 +55,19 @@ on:
         description: Helio stage execution correlation id
         required: false
         default: ''
+      bny_release_id:
+        # Recorded in the deployment evidence below so the immutable provider
+        # record names the release it belongs to, not just the run.
+        description: Helio release UUID
+        required: false
+        default: ''
+
+# Publishing deployment evidence is a write. Helio reads that record back as
+# the provider-authored proof that this run deployed this artifact; without the
+# permission the API call 403s and the stage stays unproven.
+permissions:
+  contents: read
+  deployments: write
 
 env:
   RELEASE_VERSION: ${{ github.event.inputs.release_version || 'v3.4.2' }}
@@ -76,10 +89,20 @@ jobs:
           mkdir -p dist && cp -r src package.json dist/
       - name: Package
         run: tar czf quote-to-bind-$RELEASE_VERSION.tgz dist
+      - name: Record artifact digest
+        id: digest
+        run: |
+          set -euo pipefail
+          # The digest is computed from the archive this job just produced. It
+          # is the identity the release is bound to; anything downstream that
+          # cannot name it has not proven what it deployed.
+          echo "artifact_digest=sha256:$(sha256sum quote-to-bind-$RELEASE_VERSION.tgz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: package
           path: quote-to-bind-*.tgz
+    outputs:
+      artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
 
   unit-tests:
     name: Unit Tests
@@ -206,11 +229,58 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
-    needs: prod-release-gate
+    needs: [prod-release-gate, build-and-package]
     runs-on: ubuntu-latest
     environment: production
     steps:
       - run: echo "Canary deploying $RELEASE_VERSION to PRODUCTION"
+
+      # Provider-authored, immutable record of what was deployed. Helio reads
+      # this back rather than trusting its own dispatch: the deployment exists
+      # in GitHub whether or not Helio observed the run, which is what makes it
+      # evidence instead of a claim. Only on a Helio-dispatched run — a push
+      # build has no release to bind to.
+      - name: Publish immutable release deployment evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.bny_execution_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BNY_EXECUTION_ID: ${{ inputs.bny_execution_id }}
+          BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
+          ARTIFACT_DIGEST: ${{ inputs.artifact_digest != '' && inputs.artifact_digest || needs.build-and-package.outputs.artifact_digest }}
+          ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind.yml
+          WORKFLOW_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Assert every field before publishing. A malformed record is worse
+          # than none: it would be read back as proof.
+          [[ -n "$BNY_EXECUTION_ID" ]]
+          [[ "$BNY_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ROLLBACK_WORKFLOW_ID" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml$ ]]
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+
+          jq -n \
+            --arg ref "$GITHUB_SHA" \
+            --arg execution_id "$BNY_EXECUTION_ID" \
+            --arg release_id "$BNY_RELEASE_ID" \
+            --arg artifact_uri "quote-to-bind-${RELEASE_VERSION}.tgz@$ARTIFACT_DIGEST" \
+            --arg artifact_digest "$ARTIFACT_DIGEST" \
+            --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
+            --arg workflow_revision "$WORKFLOW_REVISION" \
+            '{ref:$ref, auto_merge:false, required_contexts:[],
+              environment:"production", task:"helio-forward-release",
+              payload:{schema_version:1,
+                       bny_execution_id:$execution_id,
+                       release_id:$release_id,
+                       artifact_uri:$artifact_uri,
+                       artifact_digest:$artifact_digest,
+                       rollback_workflow_id:$rollback_workflow_id,
+                       workflow_revision:$workflow_revision}}' \
+            > deployment-evidence.json
+
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            --input deployment-evidence.json >/dev/null
 
   post-deploy-verify:
     name: Post-Deploy Verify
