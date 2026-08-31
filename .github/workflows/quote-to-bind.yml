@@ -1,4 +1,4 @@
-# Marine Cargo Quote-to-Bind — v3.4.2
+# Marine Cargo Quote-to-Bind — real Java WAR/Tomcat deployment
 #
 # Job names mirror the Helio release stages exactly so a dispatched stage maps
 # to a visible job without a lookup table. Order is enforced with `needs:`,
@@ -87,30 +87,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
       - name: Correlation
         run: |
           echo "Helio execution id ${{ github.event.inputs.bny_execution_id || 'n/a' }}"
       - name: Build
         run: |
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
-          mkdir -p dist && cp -r src package.json dist/
-      - name: Package
-        run: tar czf "quote-to-bind-$RELEASE_VERSION.tgz" dist
+          mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
       - name: Record artifact digest
         id: digest
         run: |
           set -euo pipefail
-          # The digest is computed from the archive this job just produced. It
+          # The digest is computed from the WAR this job just produced. It
           # is the identity the release is bound to; anything downstream that
           # cannot name it has not proven what it deployed.
-          digest="$(sha256sum "quote-to-bind-$RELEASE_VERSION.tgz" | cut -d' ' -f1)"
+          digest="$(sha256sum target/marine-cargo.war | cut -d' ' -f1)"
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ inputs.bny_release_id || github.run_id }}
-          path: quote-to-bind-*.tgz
+          path: target/marine-cargo.war
+          retention-days: 90
     outputs:
       artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
 
@@ -121,9 +123,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
-      - run: npm test
+      - name: Java and compatibility tests
+        run: mvn --batch-mode test && npm test
 
   sast-scan:
     name: SAST Scan
@@ -135,10 +143,10 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Static analysis
         run: |
-          echo "SAST over $(find src -name '*.js' | wc -l) source files"
+          echo "SAST over $(find src -type f \( -name '*.java' -o -name '*.js' \) | wc -l) source files"
           # Helio's :sonarqube executor reads the quality gate from the
           # SonarQube instance; this job produces the analysis it reads.
-          grep -rn "eval(\|child_process" src/ && exit 1 || echo "no dangerous constructs"
+          grep -rn "eval(\|child_process\|Runtime.getRuntime().exec" src/ && exit 1 || echo "no dangerous constructs"
 
   sca-dependency:
     name: SCA / Dependency
@@ -147,10 +155,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
       - name: Dependency + SBOM
         run: |
           echo "Generating SBOM for $RELEASE_VERSION"
-          npm ls --all --json > sbom-raw.json 2>/dev/null || true
+          mvn --batch-mode dependency:tree
           echo "dependency scan complete"
 
   security-gate:
@@ -254,10 +267,11 @@ jobs:
     name: Deploy to Prod
     if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true')) }}
     needs: [prod-release-gate, build-and-package]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     environment: production
     steps:
-      - run: echo "Canary deploying $RELEASE_VERSION to PRODUCTION"
+      - uses: actions/checkout@v4
+      - run: echo "Deploying immutable Java WAR $RELEASE_VERSION to Apache Tomcat"
 
       - name: Resolve immutable release artifact
         id: artifact
@@ -266,11 +280,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
           INPUT_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
+          ARTIFACT_STORE: ${{ runner.temp }}/helio-unused
         run: |
           set -euo pipefail
           if [[ -n "$INPUT_ARTIFACT_DIGEST" ]]; then
             digest="$INPUT_ARTIFACT_DIGEST"
-            uri="quote-to-bind-rollback@$digest"
+            package_path=""
           else
             [[ "$BNY_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
             artifact_name="package-$BNY_RELEASE_ID"
@@ -278,15 +293,38 @@ jobs:
               "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
               --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | last | .id // empty')"
             [[ -n "$artifact_id" ]]
-            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > package.zip
-            unzip -q package.zip -d package-evidence
-            package_path="$(find package-evidence -type f -name 'quote-to-bind-*.tgz' | head -n 1)"
+            evidence_dir="$RUNNER_TEMP/package-$GITHUB_RUN_ID"
+            mkdir -p "$evidence_dir"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$evidence_dir/package.zip"
+            unzip -q "$evidence_dir/package.zip" -d "$evidence_dir/unpacked"
+            package_path="$(find "$evidence_dir/unpacked" -type f -name 'marine-cargo.war' | head -n 1)"
             [[ -n "$package_path" ]]
-            digest="sha256:$(sha256sum "$package_path" | cut -d' ' -f1)"
-            uri="quote-to-bind-${RELEASE_VERSION}.tgz@$digest"
+            digest="sha256:$(shasum -a 256 "$package_path" | awk '{print $1}')"
           fi
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "artifact_digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact WAR and restart Tomcat
+        id: deploy
+        shell: bash
+        env:
+          EXPECTED_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          PACKAGE_PATH: ${{ steps.artifact.outputs.package_path }}
+        run: |
+          set -euo pipefail
+          scripts/deploy-tomcat.sh "$EXPECTED_DIGEST" "$PACKAGE_PATH" | tee "$RUNNER_TEMP/tomcat-deploy.out"
+          cat "$RUNNER_TEMP/tomcat-deploy.out" >> "$GITHUB_OUTPUT"
+
+      - name: Bind serving WAR identity
+        id: identity
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
+        run: |
+          set -euo pipefail
+          uri="marine-cargo-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}"
           echo "artifact_uri=$uri" >> "$GITHUB_OUTPUT"
 
       # Provider-authored, immutable record of what was deployed. Helio reads
@@ -302,9 +340,11 @@ jobs:
           BNY_EXECUTION_ID: ${{ inputs.bny_execution_id }}
           BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
-          ARTIFACT_URI: ${{ steps.artifact.outputs.artifact_uri }}
+          ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
           ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind.yml
           WORKFLOW_REVISION: ${{ github.sha }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+          PRODUCTION_URL: http://127.0.0.1:8080/marine-cargo/
         run: |
           set -euo pipefail
           # Assert every field before publishing. A malformed record is worse
@@ -314,6 +354,11 @@ jobs:
           [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$ROLLBACK_WORKFLOW_ID" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml$ ]]
           [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$DEPLOYMENT_ONLY" == "true" ]]; then
+            deployment_task="helio-rollback"
+          else
+            deployment_task="helio-forward-release"
+          fi
 
           jq -n \
             --arg ref "$GITHUB_SHA" \
@@ -323,8 +368,9 @@ jobs:
             --arg artifact_digest "$ARTIFACT_DIGEST" \
             --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
             --arg workflow_revision "$WORKFLOW_REVISION" \
+            --arg task "$deployment_task" \
             '{ref:$ref, auto_merge:false, required_contexts:[],
-              environment:"production", task:"helio-forward-release",
+              environment:"production", task:$task,
               payload:{schema_version:1,
                        bny_execution_id:$execution_id,
                        release_id:$release_id,
@@ -334,16 +380,24 @@ jobs:
                        workflow_revision:$workflow_revision}}' \
             > deployment-evidence.json
 
-          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
-            --input deployment-evidence.json >/dev/null
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            --input deployment-evidence.json --jq .id)"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=success \
+            -f description="Immutable WAR is serving from Apache Tomcat" \
+            -f environment_url="$PRODUCTION_URL" \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
 
   post-deploy-verify:
     name: Post-Deploy Verify
     if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify') }}
     needs: deploy-to-prod
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
       - name: Verify
         run: |
+          set -euo pipefail
           echo "Post-deploy verification for $RELEASE_VERSION"
-          echo "error rate 0.02% / threshold 1% — healthy"
+          curl --fail --silent http://127.0.0.1:8080/marine-cargo/health | jq -e '.status == "UP"'
+          curl --fail --silent http://127.0.0.1:8080/marine-cargo/artifact-digest \
+            | grep -E '^sha256:[0-9a-f]{64}$'
