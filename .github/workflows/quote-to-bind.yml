@@ -118,7 +118,7 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'unit-tests') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'unit-tests')) }}
     needs: build-and-package
     runs-on: ubuntu-latest
     steps:
@@ -135,7 +135,7 @@ jobs:
 
   sast-scan:
     name: SAST Scan
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sast-scan') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sast-scan')) }}
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -150,7 +150,7 @@ jobs:
 
   sca-dependency:
     name: SCA / Dependency
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sca-dependency') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'sca-dependency')) }}
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -177,7 +177,7 @@ jobs:
 
   deploy-to-test:
     name: Deploy to Test
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-test') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-test')) }}
     needs: security-gate
     runs-on: ubuntu-latest
     environment: test
@@ -186,7 +186,7 @@ jobs:
 
   qa-automated-tests:
     name: QA Automated Tests
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'qa-automated-tests') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'qa-automated-tests')) }}
     needs: deploy-to-test
     runs-on: ubuntu-latest
     steps:
@@ -206,7 +206,7 @@ jobs:
 
   deploy-to-uat:
     name: Deploy to UAT
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-uat') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-uat')) }}
     needs: cab-approval
     runs-on: ubuntu-latest
     environment: uat
@@ -215,7 +215,7 @@ jobs:
 
   policy-evaluation:
     name: Policy Evaluation
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'policy-evaluation') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'policy-evaluation')) }}
     needs: deploy-to-uat
     runs-on: ubuntu-latest
     steps:
@@ -236,7 +236,7 @@ jobs:
 
   deploy-to-preprod:
     name: Deploy to PreProd
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-preprod') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'deploy-to-preprod')) }}
     needs: app-owner-signoff
     runs-on: ubuntu-latest
     environment: preprod
@@ -245,7 +245,7 @@ jobs:
 
   smoke-and-perf-tests:
     name: Smoke + Perf Tests
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'smoke-and-perf-tests') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'smoke-and-perf-tests')) }}
     needs: deploy-to-preprod
     runs-on: ubuntu-latest
     steps:
@@ -265,7 +265,7 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true'))) }}
     needs: [prod-release-gate, build-and-package]
     runs-on: [self-hosted, helio-tomcat]
     environment: production
@@ -397,7 +397,7 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
-    if: ${{ (github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify') }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify')) }}
     needs: deploy-to-prod
     runs-on: [self-hosted, helio-tomcat]
     steps:
