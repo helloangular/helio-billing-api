@@ -285,7 +285,7 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true'))) }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
     needs: [prod-release-gate, build-and-package]
     runs-on: [self-hosted, helio-tomcat]
     environment: production
@@ -419,7 +419,7 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify')) }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify' }}
     needs: deploy-to-prod
     runs-on: [self-hosted, helio-tomcat]
     steps:

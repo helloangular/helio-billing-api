@@ -45,4 +45,17 @@ const buildEnd = workflow.indexOf('\n  unit-tests:', buildStart);
 assert.match(workflow.slice(buildStart, buildEnd), /sleep 8/,
   'build-and-package must expose an observable running interval');
 
+for (const productionJob of ['deploy-to-prod', 'post-deploy-verify']) {
+  const start = workflow.indexOf(`  ${productionJob}:`);
+  const remainder = workflow.slice(start + 3);
+  const nextJobMatch = remainder.match(/\n  [a-z][a-z0-9-]+:\n/);
+  const end = nextJobMatch ? start + 3 + nextJobMatch.index : undefined;
+  const definition = workflow.slice(start, end);
+  assert.doesNotMatch(
+    definition,
+    /github\.event_name != 'workflow_dispatch'/,
+    `${productionJob} must never mutate or verify production from a push build`
+  );
+}
+
 console.log('workflow contract tests passed');
