@@ -33,6 +33,16 @@ for (const job of independentlyDispatchedJobs) {
     /if: \$\{\{ always\(\) &&/,
     `${job} must evaluate its dispatch guard even when prerequisite jobs are skipped`
   );
+  assert.match(
+    definition,
+    /sleep 8/,
+    `${job} must remain observable long enough for the governed UI to render running`
+  );
 }
+
+const buildStart = workflow.indexOf('  build-and-package:');
+const buildEnd = workflow.indexOf('\n  unit-tests:', buildStart);
+assert.match(workflow.slice(buildStart, buildEnd), /sleep 8/,
+  'build-and-package must expose an observable running interval');
 
 console.log('workflow contract tests passed');
