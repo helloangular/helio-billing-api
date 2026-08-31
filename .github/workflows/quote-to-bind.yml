@@ -287,12 +287,19 @@ jobs:
             digest="$INPUT_ARTIFACT_DIGEST"
             package_path=""
           else
-            [[ "$BNY_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
-            artifact_name="package-$BNY_RELEASE_ID"
+            release_key="${BNY_RELEASE_ID:-$GITHUB_RUN_ID}"
+            if [[ ! "$release_key" =~ ^([0-9a-fA-F-]{36}|[0-9]+)$ ]]; then
+              echo "Release artifact key is invalid: $release_key" >&2
+              exit 2
+            fi
+            artifact_name="package-$release_key"
             artifact_id="$(gh api \
               "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
               --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | last | .id // empty')"
-            [[ -n "$artifact_id" ]]
+            if [[ -z "$artifact_id" ]]; then
+              echo "No unexpired GitHub artifact named $artifact_name was found" >&2
+              exit 3
+            fi
             evidence_dir="$RUNNER_TEMP/package-$GITHUB_RUN_ID"
             mkdir -p "$evidence_dir"
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$evidence_dir/package.zip"
