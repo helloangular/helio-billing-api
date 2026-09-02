@@ -10,13 +10,13 @@
 name: Marine Cargo Quote-to-Bind (fast)
 
 # Helio correlates a dispatched stage to the exact run it created by matching
-# this run-name against the bny_execution_id it passed in. It deliberately
+# this run-name against the helio_execution_id it passed in. It deliberately
 # never falls back to "newest run" -- concurrent dispatches would make that
 # ambiguous and could bind one release to another release's deployment -- so
 # without this line every dispatched stage stalls at
 # github_actions_run_pending. On push there is no input, so fall back to a
 # human-readable title.
-run-name: ${{ inputs.bny_execution_id || format('Marine Cargo Quote-to-Bind (fast) - {0}', github.sha) }}
+run-name: ${{ inputs.helio_execution_id || format('Marine Cargo Quote-to-Bind (fast) - {0}', github.sha) }}
 
 on:
   workflow_dispatch:
@@ -45,7 +45,7 @@ on:
           known-good immutable artifact.
         required: false
         default: 'false'
-      bny_execution_id:
+      helio_execution_id:
         # Helio will not dispatch a workflow it cannot correlate to the exact
         # run it creates — without this input the stage blocks with
         # github_actions_managed_contract_required rather than risk attributing
@@ -53,13 +53,13 @@ on:
         description: Helio stage execution correlation id
         required: false
         default: ''
-      bny_release_id:
+      helio_release_id:
         # Recorded in the deployment evidence below so the immutable provider
         # record names the release it belongs to, not just the run.
         description: Helio release UUID
         required: false
         default: ''
-      bny_stage_id:
+      helio_stage_id:
         # Every Helio automatic stage dispatches this workflow independently.
         # Job guards below ensure that one dispatch can execute only the stage
         # named by the immutable release plan.
@@ -81,7 +81,7 @@ env:
 jobs:
   build-and-package:
     name: Build & Package
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bny_stage_id == 'build-and-package' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.helio_stage_id == 'build-and-package' }}
     runs-on: ubuntu-latest
     steps:
       - name: Expose governed running state
@@ -94,7 +94,7 @@ jobs:
           cache: maven
       - name: Correlation
         run: |
-          echo "Helio execution id ${{ github.event.inputs.bny_execution_id || 'n/a' }}"
+          echo "Helio execution id ${{ github.event.inputs.helio_execution_id || 'n/a' }}"
       - name: Build
         run: |
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
@@ -110,7 +110,7 @@ jobs:
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: package-${{ inputs.bny_release_id || github.run_id }}
+          name: package-${{ inputs.helio_release_id || github.run_id }}
           path: target/marine-cargo.war
           retention-days: 90
     outputs:
@@ -127,7 +127,7 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.bny_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.helio_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
     needs: [prod-release-gate, build-and-package]
     runs-on: [self-hosted, helio-tomcat]
     environment: production
@@ -142,7 +142,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
           INPUT_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
           ARTIFACT_STORE: ${{ runner.temp }}/helio-unused
         run: |
@@ -151,7 +151,7 @@ jobs:
             digest="$INPUT_ARTIFACT_DIGEST"
             package_path=""
           else
-            release_key="${BNY_RELEASE_ID:-$GITHUB_RUN_ID}"
+            release_key="${HELIO_RELEASE_ID:-$GITHUB_RUN_ID}"
             if [[ ! "$release_key" =~ ^([0-9a-fA-F-]{36}|[0-9]+)$ ]]; then
               echo "Release artifact key is invalid: $release_key" >&2
               exit 2
@@ -204,12 +204,12 @@ jobs:
       # evidence instead of a claim. Only on a Helio-dispatched run — a push
       # build has no release to bind to.
       - name: Publish immutable release deployment evidence
-        if: github.event_name == 'workflow_dispatch' && inputs.bny_execution_id != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.helio_execution_id != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          BNY_EXECUTION_ID: ${{ inputs.bny_execution_id }}
-          BNY_RELEASE_ID: ${{ inputs.bny_release_id }}
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
           ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
           ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind-fast.yml
@@ -220,8 +220,8 @@ jobs:
           set -euo pipefail
           # Assert every field before publishing. A malformed record is worse
           # than none: it would be read back as proof.
-          [[ -n "$BNY_EXECUTION_ID" ]]
-          [[ "$BNY_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ -n "$HELIO_EXECUTION_ID" ]]
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$ROLLBACK_WORKFLOW_ID" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml$ ]]
           [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
@@ -233,8 +233,8 @@ jobs:
 
           jq -n \
             --arg ref "$GITHUB_SHA" \
-            --arg execution_id "$BNY_EXECUTION_ID" \
-            --arg release_id "$BNY_RELEASE_ID" \
+            --arg execution_id "$HELIO_EXECUTION_ID" \
+            --arg release_id "$HELIO_RELEASE_ID" \
             --arg artifact_uri "$ARTIFACT_URI" \
             --arg artifact_digest "$ARTIFACT_DIGEST" \
             --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
@@ -243,7 +243,7 @@ jobs:
             '{ref:$ref, auto_merge:false, required_contexts:[],
               environment:"production", task:$task,
               payload:{schema_version:1,
-                       bny_execution_id:$execution_id,
+                       helio_execution_id:$execution_id,
                        release_id:$release_id,
                        artifact_uri:$artifact_uri,
                        artifact_digest:$artifact_digest,
@@ -261,7 +261,7 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.bny_stage_id == 'post-deploy-verify' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'post-deploy-verify' }}
     needs: deploy-to-prod
     runs-on: [self-hosted, helio-tomcat]
     steps:
