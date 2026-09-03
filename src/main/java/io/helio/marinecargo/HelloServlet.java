@@ -37,8 +37,9 @@ public final class HelloServlet extends HttpServlet {
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
         DeploymentState state;
+        String context = request.getContextPath().replaceFirst("^/", "");
         try {
-            state = DeploymentState.load(stateDirectory, version);
+            state = DeploymentState.load(stateDirectory, version, context);
         } catch (IllegalStateException error) {
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, error.getMessage());
             return;

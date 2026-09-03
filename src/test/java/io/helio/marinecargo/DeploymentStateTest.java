@@ -38,6 +38,18 @@ class DeploymentStateTest {
     }
 
     @Test
+    void readsThePerContextDigestForLowerEnvironments() throws IOException {
+        Files.writeString(stateDirectory.resolve("current-digest-marine-cargo-test.txt"), DIGEST + "\n");
+
+        DeploymentState state = DeploymentState.load(stateDirectory, "v4.0.0", "marine-cargo-test");
+
+        assertEquals(DIGEST, state.artifactDigest());
+        assertEquals("current-digest.txt", DeploymentState.stateFileName("marine-cargo"));
+        assertEquals("current-digest-marine-cargo-uat.txt", DeploymentState.stateFileName("marine-cargo-uat"));
+        assertThrows(IllegalStateException.class, () -> DeploymentState.stateFileName("../etc"));
+    }
+
+    @Test
     void rejectsMissingDeploymentEvidence() {
         assertThrows(IllegalStateException.class,
                 () -> DeploymentState.load(stateDirectory, "v4.0.0"));

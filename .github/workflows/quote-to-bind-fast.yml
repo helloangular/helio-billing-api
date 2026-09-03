@@ -84,8 +84,6 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.helio_stage_id == 'build-and-package' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -132,8 +130,6 @@ jobs:
     runs-on: [self-hosted, helio-tomcat]
     environment: production
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
       - run: echo "Deploying immutable Java WAR $RELEASE_VERSION to Apache Tomcat"
 
@@ -265,8 +261,6 @@ jobs:
     needs: deploy-to-prod
     runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - name: Verify
         run: |
           set -euo pipefail

@@ -1,21 +1,24 @@
-# Marine Cargo Quote-to-Bind — real Java WAR/Tomcat deployment
+# Marine Cargo Quote-to-Bind — governed CD pipeline
 #
-# Job names mirror the Helio release stages exactly so a dispatched stage maps
-# to a visible job without a lookup table. Order is enforced with `needs:`,
-# which makes the wave structure explicit rather than implied by listing order.
+# Every stage does real work. Cloud-hosted runners build and unit-test; the
+# on-premise runner (labels: self-hosted, helio-tomcat) runs the stages that
+# need on-premise systems: SonarQube SAST, Trivy SCA, OPA policy evaluation and
+# the Apache Tomcat environments test / uat / preprod / prod.
 #
-# The four approval gates have no automated decision — a human decides them in
-# Helio. They appear here as jobs that record the handoff, so the workflow
-# represents the whole pipeline rather than only its automated parts.
+#   build-and-package → unit-tests → sast-scan ─┐
+#                                 → sca-dependency ┘→ security-gate → deploy-to-test
+#   → qa-automated-tests → cab-approval → deploy-to-uat → policy-evaluation
+#   → app-owner-signoff → deploy-to-preprod → smoke-and-perf-tests
+#   → prod-release-gate → deploy-to-prod → post-deploy-verify
+#
+# Helio dispatches each stage as its own run (helio_stage_id) and decides the
+# four human gates; on a plain push the whole chain runs as one pipeline.
 name: Marine Cargo Quote-to-Bind
 
 # Helio correlates a dispatched stage to the exact run it created by matching
-# this run-name against the helio_execution_id it passed in. It deliberately
-# never falls back to "newest run" -- concurrent dispatches would make that
-# ambiguous and could bind one release to another release's deployment -- so
-# without this line every dispatched stage stalls at
-# github_actions_run_pending. On push there is no input, so fall back to a
-# human-readable title.
+# this run-name against the helio_execution_id it passed in. It never falls
+# back to "newest run", so without this line every dispatched stage would
+# stall at github_actions_run_pending.
 run-name: ${{ inputs.helio_execution_id || format('Marine Cargo Quote-to-Bind - {0}', github.sha) }}
 
 on:
@@ -27,10 +30,6 @@ on:
         description: Helio release version being orchestrated
         required: false
         default: v3.4.2
-      # Helio's managed ROLLBACK contract dispatches this same workflow with the
-      # inputs below. workflow_dispatch rejects any input it does not declare
-      # ("Unexpected inputs provided"), so a workflow used as a rollback target
-      # must declare all of them or the rollback-deploy stage fails at dispatch.
       artifact_digest:
         description: Immutable sha256 digest to (re)deploy
         required: false
@@ -41,37 +40,25 @@ on:
         default: ''
       deployment_only:
         description: >-
-          "true" when Helio is redeploying an already-built artifact (rollback).
-          A real deployment workflow should skip build/test and deploy the
-          digest as-is; rebuilding would defeat the point of rolling back to a
-          known-good immutable artifact.
+          "true" when Helio is redeploying an already-built artifact (rollback):
+          the build is skipped and the pinned digest is installed as-is.
         required: false
         default: 'false'
       helio_execution_id:
-        # Helio will not dispatch a workflow it cannot correlate to the exact
-        # run it creates — without this input the stage blocks with
-        # github_actions_managed_contract_required rather than risk attributing
-        # an unrelated run to this release.
         description: Helio stage execution correlation id
         required: false
         default: ''
       helio_release_id:
-        # Recorded in the deployment evidence below so the immutable provider
-        # record names the release it belongs to, not just the run.
         description: Helio release UUID
         required: false
         default: ''
       helio_stage_id:
-        # Every Helio automatic stage dispatches this workflow independently.
-        # Job guards below ensure that one dispatch can execute only the stage
-        # named by the immutable release plan.
         description: Immutable Helio logical stage id to execute
         required: false
         default: ''
 
-# Publishing deployment evidence is a write. Helio reads that record back as
-# the provider-authored proof that this run deployed this artifact; without the
-# permission the API call 403s and the stage stays unproven.
+# Publishing deployment evidence is a write: Helio reads that record back as
+# the provider-authored proof that this run deployed this artifact.
 permissions:
   contents: read
   actions: read
@@ -79,6 +66,8 @@ permissions:
 
 env:
   RELEASE_VERSION: ${{ github.event.inputs.release_version || 'v3.4.2' }}
+  RELEASE_KEY: ${{ inputs.helio_release_id || github.run_id }}
+  ONPREM_TOMCAT: http://127.0.0.1:8080
 
 jobs:
   build-and-package:
@@ -86,17 +75,12 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.helio_stage_id == 'build-and-package' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Correlation
-        run: |
-          echo "Helio execution id ${{ github.event.inputs.helio_execution_id || 'n/a' }}"
       - name: Build
         run: |
           echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
@@ -105,14 +89,12 @@ jobs:
         id: digest
         run: |
           set -euo pipefail
-          # The digest is computed from the WAR this job just produced. It
-          # is the identity the release is bound to; anything downstream that
-          # cannot name it has not proven what it deployed.
           digest="$(sha256sum target/marine-cargo.war | cut -d' ' -f1)"
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
+          echo "WAR digest sha256:$digest"
       - uses: actions/upload-artifact@v4
         with:
-          name: package-${{ inputs.helio_release_id || github.run_id }}
+          name: package-${{ env.RELEASE_KEY }}
           path: target/marine-cargo.war
           retention-days: 90
     outputs:
@@ -124,8 +106,6 @@ jobs:
     needs: build-and-package
     runs-on: ubuntu-latest
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -134,45 +114,40 @@ jobs:
           cache: maven
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
-      - name: Java and compatibility tests
+      - name: Java and JavaScript unit tests
         run: mvn --batch-mode test && npm test
 
   sast-scan:
     name: SAST Scan
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sast-scan')) }}
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Static analysis
+      - name: Unit tests with coverage (feeds the quality gate)
         run: |
-          echo "SAST over $(find src -type f \( -name '*.java' -o -name '*.js' \) | wc -l) source files"
-          # Helio's :sonarqube executor reads the quality gate from the
-          # SonarQube instance; this job produces the analysis it reads.
-          grep -rn "eval(\|child_process\|Runtime.getRuntime().exec" src/ && exit 1 || echo "no dangerous constructs"
+          mvn --batch-mode -q test
+          npm run coverage
+      - name: SonarQube analysis and quality gate (on-premise SonarQube)
+        id: sonar
+        run: scripts/sonar-scan.sh "$RELEASE_VERSION"
 
   sca-dependency:
     name: SCA / Dependency
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sca-dependency')) }}
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Trivy dependency scan and SBOM (on-premise Trivy)
+        id: trivy
+        run: scripts/sca-scan.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          distribution: temurin
-          java-version: '21'
-          cache: maven
-      - name: Dependency + SBOM
-        run: |
-          echo "Generating SBOM for $RELEASE_VERSION"
-          mvn --batch-mode dependency:tree
-          echo "dependency scan complete"
+          name: sbom-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/sca
+          retention-days: 90
 
   security-gate:
     name: Security Gate
@@ -187,25 +162,32 @@ jobs:
     name: Deploy to Test
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-test')) }}
     needs: security-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     environment: test
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - run: echo "Deploying $RELEASE_VERSION to TEST"
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the TEST context
+        env:
+          TOMCAT_CONTEXT: marine-cargo-test
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   qa-automated-tests:
     name: QA Automated Tests
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'qa-automated-tests')) }}
     needs: deploy-to-test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: npm test
+      - name: HTTP end-to-end tests against the TEST environment
+        env:
+          QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/marine-cargo-test
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+        run: npm run qa
 
   cab-approval:
     name: CAB Approval
@@ -220,26 +202,39 @@ jobs:
     name: Deploy to UAT
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-uat')) }}
     needs: cab-approval
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     environment: uat
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - run: echo "Deploying $RELEASE_VERSION to UAT"
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the UAT context
+        env:
+          TOMCAT_CONTEXT: marine-cargo-uat
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   policy-evaluation:
     name: Policy Evaluation
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'policy-evaluation')) }}
     needs: deploy-to-uat
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - name: OPA policy inputs
+      - uses: actions/checkout@v4
+      - name: Evaluate the release policy (on-premise OPA, facts from SonarQube, Trivy and UAT)
+        id: policy
         run: |
-          echo "Emitting policy input for Helio's OPA evaluation"
-          echo '{"release":"'"$RELEASE_VERSION"'","lob":"marine-cargo"}' > policy-input.json
-          cat policy-input.json
+          set -euo pipefail
+          digest="$(curl --fail --silent --max-time 5 "$ONPREM_TOMCAT/marine-cargo-uat/artifact-digest")"
+          scripts/opa-policy-check.sh "$digest" "$RELEASE_KEY" preprod "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: policy-decision-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/policy
+          retention-days: 90
 
   app-owner-signoff:
     name: App Owner Sign-off
@@ -254,25 +249,30 @@ jobs:
     name: Deploy to PreProd
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-preprod')) }}
     needs: app-owner-signoff
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     environment: preprod
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - run: echo "Deploying $RELEASE_VERSION to PREPROD"
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the PREPROD context
+        env:
+          TOMCAT_CONTEXT: marine-cargo-preprod
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   smoke-and-perf-tests:
     name: Smoke + Perf Tests
     if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'smoke-and-perf-tests')) }}
     needs: deploy-to-preprod
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - name: Smoke + performance
-        run: |
-          echo "Smoke tests against PREPROD"
-          echo "p95 latency 142ms / threshold 500ms — within budget"
+      - uses: actions/checkout@v4
+      - name: Smoke and measured p95 latency against PREPROD
+        id: perf
+        run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/marine-cargo-preprod" "$RELEASE_VERSION"
 
   prod-release-gate:
     name: Prod Release Gate
@@ -290,80 +290,33 @@ jobs:
     runs-on: [self-hosted, helio-tomcat]
     environment: production
     steps:
-      - name: Expose governed running state
-        run: sleep 8
       - uses: actions/checkout@v4
-      - run: echo "Deploying immutable Java WAR $RELEASE_VERSION to Apache Tomcat"
-
       - name: Resolve immutable release artifact
         id: artifact
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
-          INPUT_ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
-          ARTIFACT_STORE: ${{ runner.temp }}/helio-unused
-        run: |
-          set -euo pipefail
-          if [[ -n "$INPUT_ARTIFACT_DIGEST" ]]; then
-            digest="$INPUT_ARTIFACT_DIGEST"
-            package_path=""
-          else
-            release_key="${HELIO_RELEASE_ID:-$GITHUB_RUN_ID}"
-            if [[ ! "$release_key" =~ ^([0-9a-fA-F-]{36}|[0-9]+)$ ]]; then
-              echo "Release artifact key is invalid: $release_key" >&2
-              exit 2
-            fi
-            artifact_name="package-$release_key"
-            artifact_id="$(gh api \
-              "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
-              --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | last | .id // empty')"
-            if [[ -z "$artifact_id" ]]; then
-              echo "No unexpired GitHub artifact named $artifact_name was found" >&2
-              exit 3
-            fi
-            evidence_dir="$RUNNER_TEMP/package-$GITHUB_RUN_ID"
-            mkdir -p "$evidence_dir"
-            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$evidence_dir/package.zip"
-            unzip -q "$evidence_dir/package.zip" -d "$evidence_dir/unpacked"
-            package_path="$(find "$evidence_dir/unpacked" -type f -name 'marine-cargo.war' | head -n 1)"
-            [[ -n "$package_path" ]]
-            digest="sha256:$(shasum -a 256 "$package_path" | awk '{print $1}')"
-          fi
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "artifact_digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
 
-      - name: Install exact WAR and restart Tomcat
+      - name: Install exact WAR and restart the production context
         id: deploy
-        shell: bash
         env:
-          EXPECTED_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
-          PACKAGE_PATH: ${{ steps.artifact.outputs.package_path }}
-        run: |
-          set -euo pipefail
-          scripts/deploy-tomcat.sh "$EXPECTED_DIGEST" "$PACKAGE_PATH" | tee "$RUNNER_TEMP/tomcat-deploy.out"
-          cat "$RUNNER_TEMP/tomcat-deploy.out" >> "$GITHUB_OUTPUT"
+          TOMCAT_CONTEXT: marine-cargo
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Bind serving WAR identity
         id: identity
-        shell: bash
         env:
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
           DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
         run: |
           set -euo pipefail
-          uri="marine-cargo-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}"
-          echo "artifact_uri=$uri" >> "$GITHUB_OUTPUT"
+          echo "artifact_uri=marine-cargo-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
 
       # Provider-authored, immutable record of what was deployed. Helio reads
-      # this back rather than trusting its own dispatch: the deployment exists
-      # in GitHub whether or not Helio observed the run, which is what makes it
-      # evidence instead of a claim. Only on a Helio-dispatched run — a push
-      # build has no release to bind to.
+      # this back rather than trusting its own dispatch. Only on a
+      # Helio-dispatched run: a push build has no release to bind to.
       - name: Publish immutable release deployment evidence
         if: github.event_name == 'workflow_dispatch' && inputs.helio_execution_id != ''
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
@@ -376,8 +329,8 @@ jobs:
           PRODUCTION_URL: http://127.0.0.1:8080/marine-cargo/
         run: |
           set -euo pipefail
-          # Assert every field before publishing. A malformed record is worse
-          # than none: it would be read back as proof.
+          # Assert every field before publishing: a malformed record would be
+          # read back as proof.
           [[ -n "$HELIO_EXECUTION_ID" ]]
           [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -423,12 +376,11 @@ jobs:
     needs: deploy-to-prod
     runs-on: [self-hosted, helio-tomcat]
     steps:
-      - name: Expose governed running state
-        run: sleep 8
-      - name: Verify
+      - uses: actions/checkout@v4
+      - name: Verify production health and serving digest
         run: |
           set -euo pipefail
           echo "Post-deploy verification for $RELEASE_VERSION"
-          curl --fail --silent http://127.0.0.1:8080/marine-cargo/health | jq -e '.status == "UP"'
-          curl --fail --silent http://127.0.0.1:8080/marine-cargo/artifact-digest \
+          curl --fail --silent "$ONPREM_TOMCAT/marine-cargo/health" | jq -e '.status == "UP"'
+          curl --fail --silent "$ONPREM_TOMCAT/marine-cargo/artifact-digest" \
             | grep -E '^sha256:[0-9a-f]{64}$'
