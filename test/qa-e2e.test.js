@@ -2,12 +2,12 @@
 // over HTTP. Nothing is mocked; the target is the Tomcat context the
 // deploy-to-test stage just installed. Run with: npm run qa
 //
-// Env: QA_TARGET_URL     (default http://127.0.0.1:8080/marine-cargo-test)
+// Env: QA_TARGET_URL     (default http://127.0.0.1:8080/billing-api-test)
 //      EXPECTED_VERSION  (optional; the release version the WAR must carry)
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const base = (process.env.QA_TARGET_URL || 'http://127.0.0.1:8080/marine-cargo-test').replace(/\/$/, '');
+const base = (process.env.QA_TARGET_URL || 'http://127.0.0.1:8080/billing-api-test').replace(/\/$/, '');
 const expectedVersion = process.env.EXPECTED_VERSION || '';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 

@@ -21,7 +21,7 @@ opa_url="${OPA_URL:-http://127.0.0.1:8181}"
 sonar_host="${SONAR_HOST_URL:-http://127.0.0.1:9000}"
 token_file="${SONAR_TOKEN_FILE:-$HOME/.helio-release-secrets/sonar-token.txt}"
 policy_file="policies/release_gate.rego"
-policy_id="helio-marine-cargo-release"
+policy_id="helio-billing-api-release"
 out="${POLICY_OUTPUT_DIR:-target/policy}"
 
 for tool in curl jq trivy; do

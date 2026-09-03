@@ -2,18 +2,18 @@
 # Install an immutable WAR into one Apache Tomcat context and wait until that
 # context serves exactly the expected digest and version.
 #
-# Contexts: marine-cargo (production, default), marine-cargo-test,
-# marine-cargo-uat, marine-cargo-preprod. All live on the same persistent
+# Contexts: billing-api (production, default), billing-api-test,
+# billing-api-uat, billing-api-preprod. All live on the same persistent
 # on-premise Tomcat; each keeps its own serving-digest state file.
 #
 # Usage: scripts/deploy-tomcat.sh <sha256 digest> [candidate war]
-# Env:   TOMCAT_CONTEXT (default marine-cargo), TOMCAT_BASE_URL (default http://127.0.0.1:8080)
+# Env:   TOMCAT_CONTEXT (default billing-api), TOMCAT_BASE_URL (default http://127.0.0.1:8080)
 #        HELIO_TOMCAT_STATE_DIR (default ~/.helio-tomcat), CATALINA_HOME
 set -euo pipefail
 
 expected_digest="${1:?expected sha256 digest is required}"
 candidate_war="${2:-}"
-context="${TOMCAT_CONTEXT:-marine-cargo}"
+context="${TOMCAT_CONTEXT:-billing-api}"
 base_url="${TOMCAT_BASE_URL:-http://127.0.0.1:8080}"
 state_root="${HELIO_TOMCAT_STATE_DIR:-$HOME/.helio-tomcat}"
 tomcat_home="${CATALINA_HOME:-$(brew --prefix tomcat)/libexec}"
@@ -26,7 +26,7 @@ if [[ ! "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "Expected digest is not an immutable SHA-256: $expected_digest" >&2
   exit 2
 fi
-if [[ ! "$context" =~ ^marine-cargo(-(test|uat|preprod))?$ ]]; then
+if [[ ! "$context" =~ ^billing-api(-(test|uat|preprod))?$ ]]; then
   echo "Refusing to deploy to an unknown Tomcat context: $context" >&2
   exit 2
 fi
@@ -36,7 +36,7 @@ if [[ ! -d "$webapps"
   echo "Refusing to deploy outside a Homebrew Tomcat webapps directory: $webapps" >&2
   exit 2
 fi
-if [[ "$context" == "marine-cargo" ]]; then
+if [[ "$context" == "billing-api" ]]; then
   state_file="$state_root/current-digest.txt"
 else
   state_file="$state_root/current-digest-$context.txt"

@@ -1,4 +1,4 @@
-package io.helio.marinecargo;
+package io.helio.billingapi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -39,13 +39,13 @@ class DeploymentStateTest {
 
     @Test
     void readsThePerContextDigestForLowerEnvironments() throws IOException {
-        Files.writeString(stateDirectory.resolve("current-digest-marine-cargo-test.txt"), DIGEST + "\n");
+        Files.writeString(stateDirectory.resolve("current-digest-billing-api-test.txt"), DIGEST + "\n");
 
-        DeploymentState state = DeploymentState.load(stateDirectory, "v4.0.0", "marine-cargo-test");
+        DeploymentState state = DeploymentState.load(stateDirectory, "v4.0.0", "billing-api-test");
 
         assertEquals(DIGEST, state.artifactDigest());
-        assertEquals("current-digest.txt", DeploymentState.stateFileName("marine-cargo"));
-        assertEquals("current-digest-marine-cargo-uat.txt", DeploymentState.stateFileName("marine-cargo-uat"));
+        assertEquals("current-digest.txt", DeploymentState.stateFileName("billing-api"));
+        assertEquals("current-digest-billing-api-uat.txt", DeploymentState.stateFileName("billing-api-uat"));
         assertThrows(IllegalStateException.class, () -> DeploymentState.stateFileName("../etc"));
     }
 

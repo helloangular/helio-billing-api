@@ -1,4 +1,4 @@
-package io.helio.marinecargo;
+package io.helio.billingapi;
 
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -62,11 +62,11 @@ public final class HelloServlet extends HttpServlet {
     }
 
     private static String page(DeploymentState state) {
-        return "<!doctype html><html><head><title>Helio Marine Cargo</title>"
+        return "<!doctype html><html><head><title>Helio Billing API</title>"
                 + "<meta name=viewport content='width=device-width,initial-scale=1'>"
                 + "<style>body{font:18px system-ui;margin:4rem;max-width:800px}"
                 + "code{overflow-wrap:anywhere;color:#075985}.ok{color:#15803d}</style></head>"
-                + "<body><h1>Hello from Marine Cargo</h1><p class=ok>Running on Apache Tomcat</p>"
+                + "<body><h1>Hello from Billing API</h1><p class=ok>Running on Apache Tomcat</p>"
                 + "<p>Release: <strong>" + html(state.version()) + "</strong></p>"
                 + "<p>WAR digest: <code>" + state.artifactDigest() + "</code></p>"
                 + "<p><a href='health'>Health</a> · <a href='artifact-digest'>Serving digest</a></p>"

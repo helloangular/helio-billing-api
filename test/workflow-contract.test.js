@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const workflow = fs.readFileSync(
-  path.join(__dirname, '..', '.github', 'workflows', 'quote-to-bind.yml'),
+  path.join(__dirname, '..', '.github', 'workflows', 'billing-api.yml'),
   'utf8'
 );
 
@@ -32,11 +32,11 @@ const onPremiseJobs = [
 const realWork = {
   'sast-scan': /scripts\/sonar-scan\.sh/,
   'sca-dependency': /scripts\/sca-scan\.sh/,
-  'deploy-to-test': /TOMCAT_CONTEXT: marine-cargo-test/,
+  'deploy-to-test': /TOMCAT_CONTEXT: billing-api-test/,
   'qa-automated-tests': /npm run qa/,
-  'deploy-to-uat': /TOMCAT_CONTEXT: marine-cargo-uat/,
+  'deploy-to-uat': /TOMCAT_CONTEXT: billing-api-uat/,
   'policy-evaluation': /scripts\/opa-policy-check\.sh/,
-  'deploy-to-preprod': /TOMCAT_CONTEXT: marine-cargo-preprod/,
+  'deploy-to-preprod': /TOMCAT_CONTEXT: billing-api-preprod/,
   'smoke-and-perf-tests': /scripts\/smoke-perf\.sh/,
   'deploy-to-prod': /scripts\/deploy-tomcat\.sh/
 };

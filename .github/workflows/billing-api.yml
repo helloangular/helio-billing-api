@@ -1,4 +1,4 @@
-# Marine Cargo Quote-to-Bind — governed CD pipeline
+# Billing API — governed CD pipeline
 #
 # Every stage does real work. Cloud-hosted runners build and unit-test; the
 # on-premise runner (labels: self-hosted, helio-tomcat) runs the stages that
@@ -13,13 +13,13 @@
 #
 # Helio dispatches each stage as its own run (helio_stage_id) and decides the
 # four human gates; on a plain push the whole chain runs as one pipeline.
-name: Marine Cargo Quote-to-Bind
+name: Billing API
 
 # Helio correlates a dispatched stage to the exact run it created by matching
 # this run-name against the helio_execution_id it passed in. It never falls
 # back to "newest run", so without this line every dispatched stage would
 # stall at github_actions_run_pending.
-run-name: ${{ inputs.helio_execution_id || format('Marine Cargo Quote-to-Bind - {0}', github.sha) }}
+run-name: ${{ inputs.helio_execution_id || format('Billing API - {0}', github.sha) }}
 
 on:
   push:
@@ -83,19 +83,19 @@ jobs:
           cache: maven
       - name: Build
         run: |
-          echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
+          echo "Building Billing API $RELEASE_VERSION"
           mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
       - name: Record artifact digest
         id: digest
         run: |
           set -euo pipefail
-          digest="$(sha256sum target/marine-cargo.war | cut -d' ' -f1)"
+          digest="$(sha256sum target/billing-api.war | cut -d' ' -f1)"
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
           echo "WAR digest sha256:$digest"
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ env.RELEASE_KEY }}
-          path: target/marine-cargo.war
+          path: target/billing-api.war
           retention-days: 90
     outputs:
       artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
@@ -173,7 +173,7 @@ jobs:
         run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the TEST context
         env:
-          TOMCAT_CONTEXT: marine-cargo-test
+          TOMCAT_CONTEXT: billing-api-test
         run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   qa-automated-tests:
@@ -185,7 +185,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: HTTP end-to-end tests against the TEST environment
         env:
-          QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/marine-cargo-test
+          QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/billing-api-test
           EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
         run: npm run qa
 
@@ -213,7 +213,7 @@ jobs:
         run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the UAT context
         env:
-          TOMCAT_CONTEXT: marine-cargo-uat
+          TOMCAT_CONTEXT: billing-api-uat
         run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   policy-evaluation:
@@ -227,7 +227,7 @@ jobs:
         id: policy
         run: |
           set -euo pipefail
-          digest="$(curl --fail --silent --max-time 5 "$ONPREM_TOMCAT/marine-cargo-uat/artifact-digest")"
+          digest="$(curl --fail --silent --max-time 5 "$ONPREM_TOMCAT/billing-api-uat/artifact-digest")"
           scripts/opa-policy-check.sh "$digest" "$RELEASE_KEY" preprod "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         if: always()
@@ -260,7 +260,7 @@ jobs:
         run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the PREPROD context
         env:
-          TOMCAT_CONTEXT: marine-cargo-preprod
+          TOMCAT_CONTEXT: billing-api-preprod
         run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
 
   smoke-and-perf-tests:
@@ -272,7 +272,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Smoke and measured p95 latency against PREPROD
         id: perf
-        run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/marine-cargo-preprod" "$RELEASE_VERSION"
+        run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/billing-api-preprod" "$RELEASE_VERSION"
 
   prod-release-gate:
     name: Prod Release Gate
@@ -300,7 +300,7 @@ jobs:
       - name: Install exact WAR and restart the production context
         id: deploy
         env:
-          TOMCAT_CONTEXT: marine-cargo
+          TOMCAT_CONTEXT: billing-api
         run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Bind serving WAR identity
@@ -310,7 +310,7 @@ jobs:
           DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
         run: |
           set -euo pipefail
-          echo "artifact_uri=marine-cargo-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "artifact_uri=billing-api-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
 
       # Provider-authored, immutable record of what was deployed. Helio reads
       # this back rather than trusting its own dispatch. Only on a
@@ -323,10 +323,10 @@ jobs:
           HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
           ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
-          ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind.yml
+          ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api.yml
           WORKFLOW_REVISION: ${{ github.sha }}
           DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
-          PRODUCTION_URL: http://127.0.0.1:8080/marine-cargo/
+          PRODUCTION_URL: http://127.0.0.1:8080/billing-api/
         run: |
           set -euo pipefail
           # Assert every field before publishing: a malformed record would be
@@ -381,6 +381,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Post-deploy verification for $RELEASE_VERSION"
-          curl --fail --silent "$ONPREM_TOMCAT/marine-cargo/health" | jq -e '.status == "UP"'
-          curl --fail --silent "$ONPREM_TOMCAT/marine-cargo/artifact-digest" \
+          curl --fail --silent "$ONPREM_TOMCAT/billing-api/health" | jq -e '.status == "UP"'
+          curl --fail --silent "$ONPREM_TOMCAT/billing-api/artifact-digest" \
             | grep -E '^sha256:[0-9a-f]{64}$'

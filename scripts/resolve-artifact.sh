@@ -35,9 +35,9 @@ else
   mkdir -p "$work_dir"
   gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$work_dir/package.zip"
   unzip -q "$work_dir/package.zip" -d "$work_dir/unpacked"
-  package_path="$(find "$work_dir/unpacked" -type f -name 'marine-cargo.war' | head -n 1)"
+  package_path="$(find "$work_dir/unpacked" -type f -name 'billing-api.war' | head -n 1)"
   if [[ -z "$package_path" ]]; then
-    echo "Artifact $artifact_name does not contain marine-cargo.war" >&2
+    echo "Artifact $artifact_name does not contain billing-api.war" >&2
     exit 3
   fi
   digest="sha256:$(shasum -a 256 "$package_path" | awk '{print $1}')"

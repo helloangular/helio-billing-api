@@ -1,7 +1,7 @@
-# Marine Cargo Quote-to-Bind — Tomcat release demo
+# Billing API — Tomcat release demo
 
 A deliberately small application whose GitHub Actions workflow mirrors the
-sixteen stages of the **Marine Cargo Quote-to-Bind** release in Helio,
+sixteen stages of the **Billing API** release in Helio,
 so the release orchestrator can be exercised end to end against a real pipeline.
 
 The build produces a Java WAR with the Helio release version embedded in it.
@@ -12,10 +12,10 @@ from that store and deploys the exact prior WAR without rebuilding it.
 
 The live application exposes:
 
-- `/marine-cargo/` — Hello World page with the serving version and WAR digest
-- `/marine-cargo/health` — Tomcat health and release identity
-- `/marine-cargo/artifact-digest` — the exact serving WAR SHA-256
-- `/marine-cargo/version` — the version embedded at build time
+- `/billing-api/` — service page with the serving version and WAR digest
+- `/billing-api/health` — Tomcat health and release identity
+- `/billing-api/artifact-digest` — the exact serving WAR SHA-256
+- `/billing-api/version` — the version embedded at build time
 
 Job names match Helio stage names exactly. That is the point of the repo: when a
 stage dispatches, the job it maps to is obvious in both UIs without a lookup
@@ -34,10 +34,10 @@ Prod Release Gate).
 | SAST Scan | SonarQube scanner against the on-premise SonarQube; stage fails on the quality gate | on-premise runner |
 | SCA / Dependency | Trivy vulnerability + secret scan, CycloneDX SBOM; fails on HIGH/CRITICAL | on-premise runner |
 | Deploy to Test / UAT / PreProd | the exact release WAR (digest-verified) into its own Tomcat context | on-premise runner |
-| QA Automated Tests | HTTP end-to-end tests against `/marine-cargo-test` | on-premise runner |
+| QA Automated Tests | HTTP end-to-end tests against `/billing-api-test` | on-premise runner |
 | Policy Evaluation | `policies/release_gate.rego` evaluated by the on-premise OPA server with facts from SonarQube, Trivy and the UAT digest | on-premise runner |
-| Smoke + Perf Tests | health, identity and a measured p95 latency budget against `/marine-cargo-preprod` | on-premise runner |
-| Deploy to Prod / Post-Deploy Verify | digest-verified WAR into `/marine-cargo`, GitHub deployment evidence, health + digest check | on-premise runner |
+| Smoke + Perf Tests | health, identity and a measured p95 latency budget against `/billing-api-preprod` | on-premise runner |
+| Deploy to Prod / Post-Deploy Verify | digest-verified WAR into `/billing-api`, GitHub deployment evidence, health + digest check | on-premise runner |
 
 The four gates (Security Gate, CAB Approval, App Owner Sign-off, Prod Release
 Gate) remain human decisions in Helio.

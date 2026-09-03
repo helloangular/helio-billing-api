@@ -1,13 +1,13 @@
-# Marine Cargo Quote-to-Bind (FAST) — demo-length CD pipeline
+# Billing API (FAST) — demo-length CD pipeline
 #
 # Same Helio contract, same real Tomcat deploy/rollback steps as
-# quote-to-bind.yml, with the twelve intermediate test/scan/environment jobs
+# billing-api.yml, with the twelve intermediate test/scan/environment jobs
 # removed so a deploy and a rollback can each be shown in a few minutes:
 #
 #   build-and-package → prod-release-gate (2 signatures) → deploy-to-prod → post-deploy-verify
 #
 # Dispatch-only (no push trigger) so it never races the full pipeline.
-name: Marine Cargo Quote-to-Bind (fast)
+name: Billing API (fast)
 
 # Helio correlates a dispatched stage to the exact run it created by matching
 # this run-name against the helio_execution_id it passed in. It deliberately
@@ -16,7 +16,7 @@ name: Marine Cargo Quote-to-Bind (fast)
 # without this line every dispatched stage stalls at
 # github_actions_run_pending. On push there is no input, so fall back to a
 # human-readable title.
-run-name: ${{ inputs.helio_execution_id || format('Marine Cargo Quote-to-Bind (fast) - {0}', github.sha) }}
+run-name: ${{ inputs.helio_execution_id || format('Billing API (fast) - {0}', github.sha) }}
 
 on:
   workflow_dispatch:
@@ -95,7 +95,7 @@ jobs:
           echo "Helio execution id ${{ github.event.inputs.helio_execution_id || 'n/a' }}"
       - name: Build
         run: |
-          echo "Building Marine Cargo Quote-to-Bind $RELEASE_VERSION"
+          echo "Building Billing API $RELEASE_VERSION"
           mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
       - name: Record artifact digest
         id: digest
@@ -104,12 +104,12 @@ jobs:
           # The digest is computed from the WAR this job just produced. It
           # is the identity the release is bound to; anything downstream that
           # cannot name it has not proven what it deployed.
-          digest="$(sha256sum target/marine-cargo.war | cut -d' ' -f1)"
+          digest="$(sha256sum target/billing-api.war | cut -d' ' -f1)"
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ inputs.helio_release_id || github.run_id }}
-          path: target/marine-cargo.war
+          path: target/billing-api.war
           retention-days: 90
     outputs:
       artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
@@ -164,7 +164,7 @@ jobs:
             mkdir -p "$evidence_dir"
             gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$evidence_dir/package.zip"
             unzip -q "$evidence_dir/package.zip" -d "$evidence_dir/unpacked"
-            package_path="$(find "$evidence_dir/unpacked" -type f -name 'marine-cargo.war' | head -n 1)"
+            package_path="$(find "$evidence_dir/unpacked" -type f -name 'billing-api.war' | head -n 1)"
             [[ -n "$package_path" ]]
             digest="sha256:$(shasum -a 256 "$package_path" | awk '{print $1}')"
           fi
@@ -191,7 +191,7 @@ jobs:
           DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
         run: |
           set -euo pipefail
-          uri="marine-cargo-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}"
+          uri="billing-api-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}"
           echo "artifact_uri=$uri" >> "$GITHUB_OUTPUT"
 
       # Provider-authored, immutable record of what was deployed. Helio reads
@@ -208,10 +208,10 @@ jobs:
           HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
           ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
-          ROLLBACK_WORKFLOW_ID: .github/workflows/quote-to-bind-fast.yml
+          ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api-fast.yml
           WORKFLOW_REVISION: ${{ github.sha }}
           DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
-          PRODUCTION_URL: http://127.0.0.1:8080/marine-cargo/
+          PRODUCTION_URL: http://127.0.0.1:8080/billing-api/
         run: |
           set -euo pipefail
           # Assert every field before publishing. A malformed record is worse
@@ -265,6 +265,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Post-deploy verification for $RELEASE_VERSION"
-          curl --fail --silent http://127.0.0.1:8080/marine-cargo/health | jq -e '.status == "UP"'
-          curl --fail --silent http://127.0.0.1:8080/marine-cargo/artifact-digest \
+          curl --fail --silent http://127.0.0.1:8080/billing-api/health | jq -e '.status == "UP"'
+          curl --fail --silent http://127.0.0.1:8080/billing-api/artifact-digest \
             | grep -E '^sha256:[0-9a-f]{64}$'

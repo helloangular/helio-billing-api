@@ -1,4 +1,4 @@
-# Marine Cargo release policy.
+# Billing API release policy.
 #
 # Evaluated by the on-premise OPA server during the policy-evaluation stage.
 # The pipeline gathers every fact below from the system of record (SonarQube,

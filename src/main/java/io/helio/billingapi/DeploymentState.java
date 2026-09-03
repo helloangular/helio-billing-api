@@ -1,4 +1,4 @@
-package io.helio.marinecargo;
+package io.helio.billingapi;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 record DeploymentState(String version, String artifactDigest) {
     private static final Pattern SHA256 = Pattern.compile("sha256:[0-9a-f]{64}");
     private static final Pattern CONTEXT = Pattern.compile("[a-z0-9][a-z0-9-]{0,63}");
-    static final String PRODUCTION_CONTEXT = "marine-cargo";
+    static final String PRODUCTION_CONTEXT = "billing-api";
 
     static DeploymentState load(Path stateDirectory, String version) {
         return load(stateDirectory, version, PRODUCTION_CONTEXT);

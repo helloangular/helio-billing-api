@@ -3,5 +3,5 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee https://jakarta.ee/xml/ns/jakartaee/web-app_6_1.xsd"
          version="6.1">
-  <display-name>Helio Marine Cargo Hello World</display-name>
+  <display-name>Helio Billing API service</display-name>
 </web-app>

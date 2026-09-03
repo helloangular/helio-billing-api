@@ -1,4 +1,4 @@
-package io.helio.marinecargo;
+package io.helio.billingapi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -40,7 +40,7 @@ class HelloServletTest {
     void healthReportsTheServingDigestOfTheProductionContext() throws Exception {
         Files.writeString(stateDirectory.resolve("current-digest.txt"), DIGEST + "\n");
 
-        Exchange health = get("/marine-cargo", "/health");
+        Exchange health = get("/billing-api", "/health");
 
         assertEquals(200, health.status());
         assertEquals("application/json", health.contentType());
@@ -52,19 +52,19 @@ class HelloServletTest {
     @Test
     void eachContextAnswersWithItsOwnDeployment() throws Exception {
         Files.writeString(stateDirectory.resolve("current-digest.txt"), DIGEST + "\n");
-        Files.writeString(stateDirectory.resolve("current-digest-marine-cargo-test.txt"), OTHER_DIGEST + "\n");
+        Files.writeString(stateDirectory.resolve("current-digest-billing-api-test.txt"), OTHER_DIGEST + "\n");
 
-        assertEquals(DIGEST, get("/marine-cargo", "/artifact-digest").body());
-        assertEquals(OTHER_DIGEST, get("/marine-cargo-test", "/artifact-digest").body());
-        assertEquals("text/plain", get("/marine-cargo-test", "/artifact-digest").contentType());
+        assertEquals(DIGEST, get("/billing-api", "/artifact-digest").body());
+        assertEquals(OTHER_DIGEST, get("/billing-api-test", "/artifact-digest").body());
+        assertEquals("text/plain", get("/billing-api-test", "/artifact-digest").contentType());
     }
 
     @Test
     void versionEndpointMatchesTheIdentityEmbeddedAtBuildTime() throws Exception {
         Files.writeString(stateDirectory.resolve("current-digest.txt"), DIGEST + "\n");
 
-        Exchange version = get("/marine-cargo", "/version");
-        Exchange health = get("/marine-cargo", "/health");
+        Exchange version = get("/billing-api", "/version");
+        Exchange health = get("/billing-api", "/health");
 
         assertEquals(200, version.status());
         assertTrue(health.body().contains("\"version\":\"" + version.body() + "\""), health.body());
@@ -73,9 +73,9 @@ class HelloServletTest {
     @Test
     void landingPageShowsReleaseAndDigest() throws Exception {
         Files.writeString(stateDirectory.resolve("current-digest.txt"), DIGEST + "\n");
-        String version = get("/marine-cargo", "/version").body();
+        String version = get("/billing-api", "/version").body();
 
-        Exchange page = get("/marine-cargo", "/");
+        Exchange page = get("/billing-api", "/");
 
         assertEquals(200, page.status());
         assertEquals("text/html", page.contentType());
@@ -86,7 +86,7 @@ class HelloServletTest {
 
     @Test
     void missingDeploymentEvidenceIsServiceUnavailable() throws Exception {
-        Exchange health = get("/marine-cargo", "/health");
+        Exchange health = get("/billing-api", "/health");
 
         assertEquals(503, health.status());
         assertTrue(health.body().contains("deployment evidence"), health.body());
