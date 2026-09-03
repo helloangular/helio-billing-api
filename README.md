@@ -53,3 +53,14 @@ Gate) remain human decisions in Helio.
 
 Scripts under `scripts/` run the same way from a shell as from the workflow, so
 each stage can be rehearsed locally before a release.
+
+## Two ways Helio can run this pipeline
+
+| Workflow | Runs as | Gates |
+|---|---|---|
+| `billing-api.yml` | one GitHub run **per stage**; Helio dispatches each stage and holds the gates itself | Helio approval stages between runs |
+| `billing-api-native.yml` | **one** GitHub run started by Helio (provider-managed execution mode) | GitHub environment protection rules on `test`, `uat`, `preprod`, `production` that call Helio's deployment-protection app |
+
+Both files run the same scripts on the same runners. The native variant needs
+a Helio GitHub App installed on the repository (custom deployment protection
+rules cannot be registered with a personal access token).

@@ -82,3 +82,51 @@ test('the Helio managed-release contract markers are present', () => {
     assert.ok(workflow.includes(required), `workflow must keep the Helio contract marker ${required}`);
   }
 });
+
+// ── Provider-owned variant: one run, gates as environment protection rules ──
+const native = fs.readFileSync(
+  path.join(__dirname, '..', '.github', 'workflows', 'billing-api-native.yml'),
+  'utf8'
+);
+
+function nativeJob(job) {
+  const start = native.indexOf(`\n  ${job}:\n`);
+  assert.notEqual(start, -1, `native workflow must define ${job}`);
+  const remainder = native.slice(start + 1);
+  const next = remainder.slice(3).match(/\n  [a-z][a-z0-9-]+:\n/);
+  return next ? remainder.slice(0, next.index + 3) : remainder;
+}
+
+test('the native workflow is one provider-owned run', () => {
+  assert.doesNotMatch(native, /helio_stage_id/, 'no per-stage dispatch guards in the native workflow');
+  assert.doesNotMatch(native, /\n  push:/, 'the native workflow is dispatch-only');
+  assert.doesNotMatch(native, /\bsleep \d+/);
+  const inputs = native.match(/^      [a-z_]+:\n(?:        .*\n)+/gm) || [];
+  assert.ok(inputs.length >= 6, 'inputs must be declared');
+  for (const input of inputs) {
+    assert.match(input, /default:/, `every input needs a default so Helio can start the run: ${input.split('\n')[0]}`);
+  }
+});
+
+test('native gates are the environments the deploy jobs enter', () => {
+  const gates = { 'deploy-to-test': 'test', 'deploy-to-uat': 'uat', 'deploy-to-preprod': 'preprod', 'deploy-to-prod': 'production' };
+  for (const [job, environment] of Object.entries(gates)) {
+    assert.match(nativeJob(job), new RegExp(`environment: ${environment}\\n`), `${job} must enter environment ${environment}`);
+  }
+  for (const gateJob of ['security-gate', 'cab-approval', 'app-owner-signoff', 'prod-release-gate']) {
+    assert.equal(native.indexOf(`\n  ${gateJob}:\n`), -1, `${gateJob} is a protection rule, not a job, in the native workflow`);
+  }
+});
+
+test('the native workflow does the same real work on the same runners', () => {
+  for (const [job, pattern] of Object.entries(realWork)) {
+    assert.match(nativeJob(job), pattern, `${job} must do its real work`);
+  }
+  for (const job of onPremiseJobs) {
+    assert.match(nativeJob(job), /runs-on: \[self-hosted, helio-tomcat\]/);
+  }
+  for (const required of ['deployments: write', 'helio_execution_id:', 'helio_release_id:',
+    'helio-forward-release', 'rollback_workflow_id']) {
+    assert.ok(native.includes(required), `native workflow must keep the Helio contract marker ${required}`);
+  }
+});

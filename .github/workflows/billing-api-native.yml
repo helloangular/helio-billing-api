@@ -1,0 +1,346 @@
+# Billing API — provider-owned CD pipeline (one run)
+#
+# The same real stages as billing-api.yml, run as ONE GitHub Actions run.
+# Helio starts the run once (provider-managed execution mode), then observes
+# it: the four human gates are GitHub environment protection rules that call
+# Helio's deployment-protection app, and Helio approves or rejects each one
+# after the required people sign in Helio.
+#
+#   build-and-package → unit-tests → sast-scan ─┐
+#                                 → sca-dependency ┘→ deploy-to-test → qa-automated-tests
+#   → deploy-to-uat → policy-evaluation → deploy-to-preprod → smoke-and-perf-tests
+#   → deploy-to-prod → post-deploy-verify
+#
+# Gate mapping (environment protection rule → Helio gate):
+#   test        Security Gate         (1 signature)
+#   uat         CAB Approval          (1 signature)
+#   preprod     App Owner Sign-off    (1 signature)
+#   production  Prod Release Gate     (2 signatures)
+#
+# Cloud-hosted runners build and unit-test; the on-premise runner
+# (labels: self-hosted, helio-tomcat) runs SonarQube SAST, Trivy SCA, OPA
+# policy evaluation and the Apache Tomcat environments.
+name: Billing API (native)
+
+# Helio correlates the run it started by matching this run-name against the
+# helio_execution_id it passed in.
+run-name: ${{ inputs.helio_execution_id || format('Billing API (native) - {0}', github.sha) }}
+
+# Dispatch only: Helio is the only thing that starts a governed run. Every
+# input has a default so the run can also be started by hand for a rehearsal.
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Helio release version being orchestrated
+        required: false
+        default: v3.4.2
+      artifact_digest:
+        description: Immutable sha256 digest to (re)deploy
+        required: false
+        default: ''
+      workflow_revision:
+        description: Commit SHA this deployment workflow is pinned to
+        required: false
+        default: ''
+      deployment_only:
+        description: >-
+          "true" when Helio is redeploying an already-built artifact (rollback):
+          build, tests, scans and lower environments are skipped and the pinned
+          digest is installed into production as-is.
+        required: false
+        default: 'false'
+      helio_execution_id:
+        description: Helio execution correlation id for this run
+        required: false
+        default: ''
+      helio_release_id:
+        description: Helio release UUID
+        required: false
+        default: ''
+
+# Publishing deployment evidence is a write: Helio reads that record back as
+# the provider-authored proof that this run deployed this artifact.
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+env:
+  RELEASE_VERSION: ${{ inputs.release_version || 'v3.4.2' }}
+  RELEASE_KEY: ${{ inputs.helio_release_id || github.run_id }}
+  ONPREM_TOMCAT: http://127.0.0.1:8080
+
+jobs:
+  build-and-package:
+    name: Build & Package
+    if: ${{ inputs.deployment_only != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build
+        run: |
+          echo "Building Billing API $RELEASE_VERSION"
+          mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
+      - name: Record artifact digest
+        id: digest
+        run: |
+          set -euo pipefail
+          digest="$(sha256sum target/billing-api.war | cut -d' ' -f1)"
+          echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
+          echo "WAR digest sha256:$digest"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ env.RELEASE_KEY }}
+          path: target/billing-api.war
+          retention-days: 90
+    outputs:
+      artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
+
+  unit-tests:
+    name: Unit Tests
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Java and JavaScript unit tests
+        run: mvn --batch-mode test && npm test
+
+  sast-scan:
+    name: SAST Scan
+    needs: unit-tests
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests with coverage (feeds the quality gate)
+        run: |
+          mvn --batch-mode -q test
+          npm run coverage
+      - name: SonarQube analysis and quality gate (on-premise SonarQube)
+        run: scripts/sonar-scan.sh "$RELEASE_VERSION"
+
+  sca-dependency:
+    name: SCA / Dependency
+    needs: unit-tests
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy dependency scan and SBOM (on-premise Trivy)
+        run: scripts/sca-scan.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/sca
+          retention-days: 90
+
+  # Entering "test" is the Security Gate: the environment's protection rule
+  # asks Helio, which waits for the signature before GitHub releases the job.
+  deploy-to-test:
+    name: Deploy to Test
+    needs: [sast-scan, sca-dependency]
+    runs-on: [self-hosted, helio-tomcat]
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the TEST context
+        env:
+          TOMCAT_CONTEXT: billing-api-test
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  qa-automated-tests:
+    name: QA Automated Tests
+    needs: deploy-to-test
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: HTTP end-to-end tests against the TEST environment
+        env:
+          QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/billing-api-test
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+        run: npm run qa
+
+  # Entering "uat" is the CAB Approval gate.
+  deploy-to-uat:
+    name: Deploy to UAT
+    needs: qa-automated-tests
+    runs-on: [self-hosted, helio-tomcat]
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the UAT context
+        env:
+          TOMCAT_CONTEXT: billing-api-uat
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  policy-evaluation:
+    name: Policy Evaluation
+    needs: deploy-to-uat
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Evaluate the release policy (on-premise OPA, facts from SonarQube, Trivy and UAT)
+        run: |
+          set -euo pipefail
+          digest="$(curl --fail --silent --max-time 5 "$ONPREM_TOMCAT/billing-api-uat/artifact-digest")"
+          scripts/opa-policy-check.sh "$digest" "$RELEASE_KEY" preprod "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: policy-decision-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/policy
+          retention-days: 90
+
+  # Entering "preprod" is the App Owner Sign-off gate.
+  deploy-to-preprod:
+    name: Deploy to PreProd
+    needs: policy-evaluation
+    runs-on: [self-hosted, helio-tomcat]
+    environment: preprod
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the PREPROD context
+        env:
+          TOMCAT_CONTEXT: billing-api-preprod
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  smoke-and-perf-tests:
+    name: Smoke + Perf Tests
+    needs: deploy-to-preprod
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke and measured p95 latency against PREPROD
+        run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/billing-api-preprod" "$RELEASE_VERSION"
+
+  # Entering "production" is the Prod Release Gate (two signatures in Helio).
+  # On a rollback (deployment_only=true) every job above is skipped and this
+  # is the first job that runs, so it must tolerate skipped prerequisites but
+  # never a failed or cancelled one.
+  deploy-to-prod:
+    name: Deploy to Prod
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [smoke-and-perf-tests, build-and-package]
+    runs-on: [self-hosted, helio-tomcat]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install exact WAR and restart the production context
+        id: deploy
+        env:
+          TOMCAT_CONTEXT: billing-api
+        run: scripts/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Bind serving WAR identity
+        id: identity
+        env:
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
+        run: |
+          set -euo pipefail
+          echo "artifact_uri=billing-api-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # Provider-authored, immutable record of what was deployed. Helio reads
+      # this back rather than trusting its own dispatch. Only on a run Helio
+      # started: a manual rehearsal has no release to bind to.
+      - name: Publish immutable release deployment evidence
+        if: inputs.helio_execution_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
+          ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api-native.yml
+          WORKFLOW_REVISION: ${{ github.sha }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+          PRODUCTION_URL: http://127.0.0.1:8080/billing-api/
+        run: |
+          set -euo pipefail
+          # Assert every field before publishing: a malformed record would be
+          # read back as proof.
+          [[ -n "$HELIO_EXECUTION_ID" ]]
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ROLLBACK_WORKFLOW_ID" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml$ ]]
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$DEPLOYMENT_ONLY" == "true" ]]; then
+            deployment_task="helio-rollback"
+          else
+            deployment_task="helio-forward-release"
+          fi
+
+          jq -n \
+            --arg ref "$GITHUB_SHA" \
+            --arg execution_id "$HELIO_EXECUTION_ID" \
+            --arg release_id "$HELIO_RELEASE_ID" \
+            --arg artifact_uri "$ARTIFACT_URI" \
+            --arg artifact_digest "$ARTIFACT_DIGEST" \
+            --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
+            --arg workflow_revision "$WORKFLOW_REVISION" \
+            --arg task "$deployment_task" \
+            '{ref:$ref, auto_merge:false, required_contexts:[],
+              environment:"production", task:$task,
+              payload:{schema_version:1,
+                       helio_execution_id:$execution_id,
+                       release_id:$release_id,
+                       artifact_uri:$artifact_uri,
+                       artifact_digest:$artifact_digest,
+                       rollback_workflow_id:$rollback_workflow_id,
+                       workflow_revision:$workflow_revision}}' \
+            > deployment-evidence.json
+
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            --input deployment-evidence.json --jq .id)"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=success \
+            -f description="Immutable WAR is serving from Apache Tomcat" \
+            -f environment_url="$PRODUCTION_URL" \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+
+  post-deploy-verify:
+    name: Post-Deploy Verify
+    needs: deploy-to-prod
+    runs-on: [self-hosted, helio-tomcat]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify production health and serving digest
+        run: |
+          set -euo pipefail
+          echo "Post-deploy verification for $RELEASE_VERSION"
+          curl --fail --silent "$ONPREM_TOMCAT/billing-api/health" | jq -e '.status == "UP"'
+          curl --fail --silent "$ONPREM_TOMCAT/billing-api/artifact-digest" \
+            | grep -E '^sha256:[0-9a-f]{64}$'
