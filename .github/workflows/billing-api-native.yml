@@ -43,9 +43,9 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: Helio release version being orchestrated
+        description: "Helio release version being orchestrated (default: derived from the commit)"
         required: false
-        default: v3.4.2
+        default: ''
       artifact_digest:
         description: Immutable sha256 digest to (re)deploy
         required: false
@@ -72,12 +72,19 @@ on:
 
 # Publishing deployment evidence is a write: Helio reads that record back as
 # the provider-authored proof that this run deployed this artifact.
+# One release at a time through the shared environments; a second run queues
+# behind the first instead of overwriting an environment it is still validating.
+concurrency:
+  group: billing-api-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: read
 
 env:
-  RELEASE_VERSION: ${{ inputs.release_version || 'v3.4.2' }}
+  # Versions are immutable in Nexus, so an unversioned run gets a commit-derived one.
+  RELEASE_VERSION: ${{ inputs.release_version || format('v3.4.2-{0}', github.sha) }}
   RELEASE_KEY: ${{ inputs.helio_release_id || github.run_id }}
   # Deployment target and artifact registry as seen from the on-premise runner.
   # Override per repository (Settings > Variables); the defaults are the demo host.
@@ -100,8 +107,8 @@ jobs:
           set -euo pipefail
           [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
             || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
-          [[ -z "$WORKFLOW_REVISION" || "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
-            || { echo "workflow_revision $WORKFLOW_REVISION does not match the executing commit $GITHUB_SHA" >&2; exit 1; }
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
+            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
       - name: Build
         run: |
           echo "Building Billing API $RELEASE_VERSION"
@@ -199,6 +206,9 @@ jobs:
     name: QA Automated Tests
     needs: deploy-to-test
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: billing-api-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: HTTP end-to-end tests against the TEST environment
@@ -232,6 +242,9 @@ jobs:
     name: Policy Evaluation
     needs: deploy-to-uat
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: billing-api-uat
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Evaluate the release policy (on-premise OPA, facts from SonarQube, Trivy and UAT)
@@ -273,6 +286,9 @@ jobs:
     name: Smoke + Perf Tests
     needs: deploy-to-preprod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: billing-api-preprod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Smoke and measured p95 latency against PREPROD
@@ -307,8 +323,8 @@ jobs:
           set -euo pipefail
           [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
             || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
-          [[ -z "$WORKFLOW_REVISION" || "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
-            || { echo "workflow_revision $WORKFLOW_REVISION does not match the executing commit $GITHUB_SHA" >&2; exit 1; }
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
+            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
       - name: Resolve immutable release artifact
         id: artifact
         env:
@@ -394,10 +410,18 @@ jobs:
     name: Post-Deploy Verify
     needs: deploy-to-prod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: billing-api-production
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify production serves the approved artifact
         env:
           EXPECTED_DIGEST: ${{ inputs.artifact_digest || needs.deploy-to-prod.outputs.artifact_digest }}
-          EXPECTED_VERSION: ${{ inputs.deployment_only == 'true' && '' || env.RELEASE_VERSION }}
-        run: scripts/verify-deployment.sh "$ONPREM_TOMCAT/billing-api" "$EXPECTED_DIGEST" "$EXPECTED_VERSION"
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: |
+          set -euo pipefail
+          # A rollback redeploys an older version: verify the digest only.
+          [[ "$DEPLOYMENT_ONLY" == "true" ]] && EXPECTED_VERSION=""
+          scripts/verify-deployment.sh "$ONPREM_TOMCAT/billing-api" "$EXPECTED_DIGEST" "$EXPECTED_VERSION"

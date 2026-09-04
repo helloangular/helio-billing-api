@@ -22,9 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: Helio release version being orchestrated
+        description: "Helio release version being orchestrated (default: derived from the commit)"
         required: false
-        default: v3.4.2
+        default: ''
       # Helio's managed ROLLBACK contract dispatches this same workflow with the
       # inputs below. workflow_dispatch rejects any input it does not declare
       # ("Unexpected inputs provided"), so a workflow used as a rollback target
@@ -75,7 +75,9 @@ permissions:
   actions: read
 
 env:
-  RELEASE_VERSION: ${{ github.event.inputs.release_version || 'v3.4.2' }}
+  RELEASE_VERSION: ${{ inputs.release_version || format('v3.4.2-{0}', github.sha) }}
+  NEXUS_URL: ${{ vars.NEXUS_URL || 'http://127.0.0.1:8081' }}
+  ONPREM_TOMCAT: ${{ vars.ONPREM_TOMCAT || 'http://127.0.0.1:8080' }}
   RELEASE_KEY: ${{ inputs.helio_release_id || github.run_id }}
 
 jobs:
@@ -105,6 +107,7 @@ jobs:
         id: publish
         run: scripts/publish-artifact.sh "$RELEASE_VERSION" target/billing-api.war
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ vars.KEEP_GITHUB_ARTIFACTS == 'true' }}
         with:
           name: package-${{ inputs.helio_release_id || github.run_id }}
           path: target/billing-api.war
@@ -233,10 +236,13 @@ jobs:
     needs: deploy-to-prod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
-      - name: Verify
+      - name: Verify production serves the approved artifact
+        env:
+          EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
         run: |
           set -euo pipefail
-          echo "Post-deploy verification for $RELEASE_VERSION"
-          curl --fail --silent http://127.0.0.1:8080/billing-api/health | jq -e '.status == "UP"'
-          curl --fail --silent http://127.0.0.1:8080/billing-api/artifact-digest \
-            | grep -E '^sha256:[0-9a-f]{64}$'
+          expected="${EXPECTED_DIGEST:-$(scripts/registry-digest.sh "$RELEASE_VERSION")}"
+          [[ "$DEPLOYMENT_ONLY" == "true" ]] && EXPECTED_VERSION=""
+          scripts/verify-deployment.sh "$ONPREM_TOMCAT/billing-api" "$expected" "$EXPECTED_VERSION"

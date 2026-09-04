@@ -162,3 +162,19 @@ for (const [label, text] of [['segmented', workflow], ['native', native]]) {
     assert.match(text, /scripts\/verify-deployment\.sh "\$ONPREM_TOMCAT\/billing-api" "\$/);
   });
 }
+
+test('no expression ternary yields an empty string (rollback verification bug)', () => {
+  for (const text of [workflow, native, fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'billing-api-fast.yml'), 'utf8')]) {
+    assert.doesNotMatch(text, /&& '' \|\|/, "GitHub expressions treat '' as falsey; decide in the shell instead");
+    assert.match(text, /DEPLOYMENT_ONLY" == "true" \]\] && EXPECTED_VERSION=""/);
+    assert.match(text, /format\('v3\.4\.2-\{0\}', github\.sha\)/, 'an unversioned run must not reuse an immutable registry version');
+    assert.doesNotMatch(text, /-z "\$WORKFLOW_REVISION" \|\|/, 'workflow_revision is mandatory on governed runs');
+  }
+});
+test('native: one release at a time, and each environment lock covers its validation stage', () => {
+  assert.match(native, /^concurrency:\n  group: billing-api-release\n  cancel-in-progress: false/m);
+  for (const [job, env] of [['qa-automated-tests', 'test'], ['policy-evaluation', 'uat'], ['smoke-and-perf-tests', 'preprod'], ['post-deploy-verify', 'production']]) {
+    assert.match(nativeJob(job), new RegExp(`group: billing-api-${env}`), `${job} holds the ${env} lock`);
+    assert.match(jobDefinition(job), new RegExp(`group: billing-api-${env}`), `${job} holds the ${env} lock (segmented)`);
+  }
+});

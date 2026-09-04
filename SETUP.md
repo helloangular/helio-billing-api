@@ -52,8 +52,9 @@ environment. Never put registry or scanner credentials in this repository.
 
 Register the GitHub Actions integration (PAT for dispatch, or the GitHub App for gates), Nexus
 (`https://…`, config `repository`, `component`) and, if used, Datadog (`token`, `app_key`,
-`monitor_tags`). Helio only accepts `https` integration URLs. Tool integrations activate through
-**Test Connection**; a failed test blocks them.
+`monitor_tags`). Helio only accepts `https` integration URLs. In **Admin › Integrations**, the Nexus and Datadog cards
+offer **Test Connection**; a tool integration is created inactive and that test is what activates it
+(a failed test blocks it).
 
 ## 6. Supply-chain notes already applied in the workflow
 
