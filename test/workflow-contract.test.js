@@ -184,6 +184,27 @@ for (const [label, text] of [['segmented', workflow], ['native', native]]) {
   });
 }
 
+test('official JavaScript actions use pinned Node 24 releases', () => {
+  const fast = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'billing-api-fast.yml'),
+    'utf8'
+  );
+  const requiredPins = {
+    'actions/checkout': '3d3c42e5aac5ba805825da76410c181273ba90b1', // v7.0.1
+    'actions/setup-java': 'dd06d9cba3e5552c54d9f8ea23572deb30010f7c', // v6.0.0
+    'actions/setup-node': '820762786026740c76f36085b0efc47a31fe5020', // v7.0.0
+    'actions/upload-artifact': '043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' // v7.0.1
+  };
+  for (const [label, text] of [['segmented', workflow], ['native', native], ['fast', fast]]) {
+    for (const [action, sha] of Object.entries(requiredPins)) {
+      const refs = [...text.matchAll(new RegExp(`uses: ${action.replace('/', '\\/')}@([^\\s#]+)`, 'g'))]
+        .map((match) => match[1]);
+      if (refs.length === 0) continue;
+      assert.deepEqual([...new Set(refs)], [sha], `${label} must pin ${action} to its Node 24 release`);
+    }
+  }
+});
+
 test('no expression ternary yields an empty string (rollback verification bug)', () => {
   for (const text of [workflow, native, fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'billing-api-fast.yml'), 'utf8')]) {
     assert.doesNotMatch(text, /&& '' \|\|/, "GitHub expressions treat '' as falsey; decide in the shell instead");
