@@ -408,6 +408,10 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
+    # On a rollback every job before production is skipped; GitHub's default
+    # condition treats a skipped ancestor as failure, so verify explicitly
+    # whenever production itself deployed.
+    if: ${{ !cancelled() && needs.deploy-to-prod.result == 'success' }}
     needs: deploy-to-prod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     concurrency:
