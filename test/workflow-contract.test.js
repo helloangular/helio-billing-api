@@ -38,7 +38,8 @@ const realWork = {
   'policy-evaluation': /scripts\/opa-policy-check\.sh/,
   'deploy-to-preprod': /TOMCAT_CONTEXT: billing-api-preprod/,
   'smoke-and-perf-tests': /scripts\/smoke-perf\.sh/,
-  'deploy-to-prod': /scripts\/deploy-tomcat\.sh/
+  'deploy-to-prod': /scripts\/deploy-tomcat\.sh/,
+  'post-deploy-verify': /scripts\/verify-deployment\.sh/
 };
 
 test('every automated stage is individually dispatchable by Helio', () => {
@@ -53,11 +54,11 @@ test('every automated stage is individually dispatchable by Helio', () => {
 
 test('stages that need on-premise systems run on the on-premise runner', () => {
   for (const job of onPremiseJobs) {
-    assert.match(jobDefinition(job), /runs-on: \[self-hosted, helio-tomcat\]/,
+    assert.match(jobDefinition(job), /runs-on: \[self-hosted, "\$\{\{ vars\.HELIO_RUNNER_LABEL \|\| 'helio-tomcat' \}\}"\]/,
       `${job} needs on-premise systems and must run on the on-premise runner`);
   }
   assert.match(jobDefinition('unit-tests'), /runs-on: ubuntu-latest/, 'unit-tests runs on GitHub-hosted runners');
-  assert.match(jobDefinition('build-and-package'), /runs-on: \[self-hosted, helio-tomcat\]/, 'the build publishes to the internal Nexus, so it runs on-premise');
+  assert.match(jobDefinition('build-and-package'), /runs-on: \[self-hosted, "\$\{\{ vars\.HELIO_RUNNER_LABEL \|\| 'helio-tomcat' \}\}"\]/, 'the build publishes to the internal Nexus, so it runs on-premise');
   assert.match(jobDefinition('build-and-package'), /scripts\/publish-artifact\.sh/, 'the build must publish to the artifact system of record');
 });
 
@@ -123,10 +124,41 @@ test('the native workflow does the same real work on the same runners', () => {
     assert.match(nativeJob(job), pattern, `${job} must do its real work`);
   }
   for (const job of onPremiseJobs) {
-    assert.match(nativeJob(job), /runs-on: \[self-hosted, helio-tomcat\]/);
+    assert.match(nativeJob(job), /runs-on: \[self-hosted, "\$\{\{ vars\.HELIO_RUNNER_LABEL \|\| 'helio-tomcat' \}\}"\]/);
   }
   for (const required of ['deployments: write', 'helio_execution_id:', 'helio_release_id:',
     'helio-forward-release', 'rollback_workflow_id']) {
     assert.ok(native.includes(required), `native workflow must keep the Helio contract marker ${required}`);
   }
 });
+
+// ── Production hardening that both governed files must keep ──
+for (const [label, text] of [['segmented', workflow], ['native', native]]) {
+  test(`${label}: every action is pinned to a full commit SHA`, () => {
+    const uses = [...text.matchAll(/uses: ([^\s#]+)/g)].map((m) => m[1]);
+    assert.ok(uses.length >= 4);
+    for (const ref of uses) assert.match(ref, /@[0-9a-f]{40}$/, `${ref} must be pinned to a commit SHA`);
+  });
+  test(`${label}: deployments:write is granted only to the production job`, () => {
+    const workflowLevel = text.slice(0, text.indexOf('\njobs:'));
+    assert.doesNotMatch(workflowLevel, /deployments: write/);
+    const prod = label === 'native' ? nativeJob('deploy-to-prod') : jobDefinition('deploy-to-prod');
+    assert.match(prod, /deployments: write/);
+    assert.equal((text.match(/deployments: write/g) || []).length, 1);
+  });
+  test(`${label}: deployments to one environment are serialised without cancelling`, () => {
+    for (const env of ['test', 'uat', 'preprod', 'production']) {
+      assert.match(text, new RegExp(`group: billing-api-${env}\\n\\s+cancel-in-progress: false`), `concurrency group for ${env}`);
+    }
+  });
+  test(`${label}: nothing leaves the boundary as a GitHub artifact unless allowed`, () => {
+    const uploads = text.split('\n').filter((l) => l.includes('actions/upload-artifact')).length;
+    const gated = (text.match(/vars\.KEEP_GITHUB_ARTIFACTS == 'true'/g) || []).length;
+    assert.ok(uploads >= 3 && gated === uploads, `${uploads} uploads, ${gated} gated`);
+  });
+  test(`${label}: governed runs validate their inputs and verify the served artifact`, () => {
+    assert.equal((text.match(/Validate governed inputs/g) || []).length, 2);
+    assert.match(text, /WORKFLOW_REVISION" == "\$GITHUB_SHA"/);
+    assert.match(text, /scripts\/verify-deployment\.sh "\$ONPREM_TOMCAT\/billing-api" "\$/);
+  });
+}

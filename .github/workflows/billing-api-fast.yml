@@ -73,7 +73,6 @@ on:
 permissions:
   contents: read
   actions: read
-  deployments: write
 
 env:
   RELEASE_VERSION: ${{ github.event.inputs.release_version || 'v3.4.2' }}
@@ -83,9 +82,9 @@ jobs:
   build-and-package:
     name: Build & Package
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.helio_stage_id == 'build-and-package' }}
-    runs-on: [self-hosted, helio-tomcat]
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Correlation
         run: |
           echo "Helio execution id ${{ github.event.inputs.helio_execution_id || 'n/a' }}"
@@ -105,7 +104,7 @@ jobs:
       - name: Publish the WAR to the on-premise Nexus repository (artifact system of record)
         id: publish
         run: scripts/publish-artifact.sh "$RELEASE_VERSION" target/billing-api.war
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: package-${{ inputs.helio_release_id || github.run_id }}
           path: target/billing-api.war
@@ -126,10 +125,17 @@ jobs:
     name: Deploy to Prod
     if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.helio_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
     needs: [prod-release-gate, build-and-package]
-    runs-on: [self-hosted, helio-tomcat]
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     environment: production
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+    concurrency:
+      group: billing-api-production
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: echo "Deploying immutable Java WAR $RELEASE_VERSION to Apache Tomcat"
 
       - name: Resolve immutable release artifact
@@ -225,7 +231,7 @@ jobs:
     name: Post-Deploy Verify
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'post-deploy-verify' }}
     needs: deploy-to-prod
-    runs-on: [self-hosted, helio-tomcat]
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
       - name: Verify
         run: |
