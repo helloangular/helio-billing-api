@@ -5,10 +5,11 @@ sixteen stages of the **Billing API** release in Helio,
 so the release orchestrator can be exercised end to end against a real pipeline.
 
 The build produces a Java WAR with the Helio release version embedded in it.
-The production job runs on the repository-scoped `helio-tomcat` runner, verifies
-the WAR SHA-256, retains it in an immutable local artifact store, and hot-deploys
-it to Apache Tomcat. A rollback dispatch selects the previously approved digest
-from that store and deploys the exact prior WAR without rebuilding it.
+The build and production jobs run on the repository-scoped `helio-tomcat`
+runner. The build publishes the WAR to an immutable Nexus repository; every
+deployment resolves it from Nexus and verifies its SHA-256 before deploying it
+to Apache Tomcat. A rollback dispatch deploys the exact previously approved
+digest without rebuilding it.
 
 The live application exposes:
 
@@ -21,15 +22,15 @@ Job names match Helio stage names exactly. That is the point of the repo: when a
 stage dispatches, the job it maps to is obvious in both UIs without a lookup
 table.
 
-Four stages are **approval gates** and have no automated decision — they are
-decided by a human in Helio (Security Gate, CAB Approval, App Owner Sign-off,
-Prod Release Gate).
+The execution mode determines who owns the four approval gates. In the
+segmented workflow they are Helio stages. In the native workflow they are
+GitHub environment protection rules, which can call the Helio GitHub App.
 
 ## Every stage is real
 
 | Stage | What runs | Where |
 |---|---|---|
-| Build & Package | `mvn clean package`, WAR SHA-256 recorded, uploaded as `package-<release>` | GitHub-hosted |
+| Build & Package | `mvn clean package`, WAR SHA-256 recorded, published once to Nexus | on-premise runner |
 | Unit Tests | `mvn test` + `npm test` | GitHub-hosted |
 | SAST Scan | SonarQube scanner against the on-premise SonarQube; stage fails on the quality gate | on-premise runner |
 | SCA / Dependency | Trivy vulnerability + secret scan, CycloneDX SBOM; fails on HIGH/CRITICAL | on-premise runner |
@@ -38,9 +39,6 @@ Prod Release Gate).
 | Policy Evaluation | `policies/release_gate.rego` evaluated by the on-premise OPA server with facts from SonarQube, Trivy and the UAT digest | on-premise runner |
 | Smoke + Perf Tests | health, identity and a measured p95 latency budget against `/billing-api-preprod` | on-premise runner |
 | Deploy to Prod / Post-Deploy Verify | digest-verified WAR into `/billing-api`, GitHub deployment evidence, health + digest check | on-premise runner |
-
-The four gates (Security Gate, CAB Approval, App Owner Sign-off, Prod Release
-Gate) remain human decisions in Helio.
 
 ### On-premise prerequisites for the runner host
 
@@ -58,9 +56,12 @@ each stage can be rehearsed locally before a release.
 
 | Workflow | Runs as | Gates |
 |---|---|---|
-| `billing-api.yml` | one GitHub run **per stage**; Helio dispatches each stage and holds the gates itself | Helio approval stages between runs |
-| `billing-api-native.yml` | **one** GitHub run started by Helio (provider-managed execution mode) | GitHub environment protection rules on `test`, `uat`, `preprod`, `production` that call Helio's deployment-protection app |
+| `billing-api.yml` | one correlated GitHub run **per provider stage**; it has no push trigger and refuses dispatches without the complete Helio envelope | Helio approval stages between runs |
+| `billing-api-native.yml` | **one** GitHub run started by Helio or manually for a rehearsal | GitHub environment protection rules on `test`, `uat`, `preprod`, `production`; those rules may call Helio's deployment-protection app |
 
 Both files run the same scripts on the same runners. The native variant needs
 a Helio GitHub App installed on the repository (custom deployment protection
 rules cannot be registered with a personal access token).
+
+See [`SETUP.md`](SETUP.md) before importing either workflow. The repository is
+a reference implementation, not a zero-configuration production deployment.

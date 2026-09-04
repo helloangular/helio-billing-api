@@ -10,6 +10,10 @@ const workflow = fs.readFileSync(
   path.join(__dirname, '..', '.github', 'workflows', 'billing-api.yml'),
   'utf8'
 );
+const governedInputValidator = fs.readFileSync(
+  path.join(__dirname, '..', 'scripts', 'validate-governed-inputs.sh'),
+  'utf8'
+);
 
 function jobDefinition(job) {
   const start = workflow.indexOf(`\n  ${job}:\n`);
@@ -71,10 +75,24 @@ test('every stage does real work and nothing is padded', () => {
 });
 
 test('production is only ever touched by a Helio dispatch', () => {
+  assert.doesNotMatch(workflow, /\n  push:/,
+    'the segmented workflow is dispatched by Helio; native standalone execution has its own workflow');
   for (const productionJob of ['deploy-to-prod', 'post-deploy-verify']) {
     assert.doesNotMatch(jobDefinition(productionJob), /github\.event_name != 'workflow_dispatch'/,
       `${productionJob} must never mutate or verify production from a push build`);
+    assert.match(jobDefinition(productionJob), /inputs\.helio_execution_id != ''/,
+      `${productionJob} must require a Helio correlation id`);
   }
+});
+
+test('every segmented provider stage validates the complete Helio dispatch envelope', () => {
+  for (const job of ['build-and-package', ...independentlyDispatchedJobs]) {
+    const definition = jobDefinition(job);
+    assert.match(definition, /scripts\/validate-governed-inputs\.sh/,
+      `${job} must validate the release, execution, stage and workflow revision`);
+  }
+  assert.match(governedInputValidator, /\[0-9a-fA-F\]\{8\}.*\[1-5\].*\[89abAB\].*\[0-9a-fA-F\]\{12\}/,
+    'governed identifiers must use the UUID shape, not merely contain 36 hex/hyphen characters');
 });
 
 test('the Helio managed-release contract markers are present', () => {
@@ -157,9 +175,12 @@ for (const [label, text] of [['segmented', workflow], ['native', native]]) {
     assert.ok(uploads >= 3 && gated === uploads, `${uploads} uploads, ${gated} gated`);
   });
   test(`${label}: governed runs validate their inputs and verify the served artifact`, () => {
-    assert.equal((text.match(/Validate governed inputs/g) || []).length, 2);
-    assert.match(text, /WORKFLOW_REVISION" == "\$GITHUB_SHA"/);
+    assert.ok((text.match(/Validate governed inputs/g) || []).length >= 2);
+    assert.match(label === 'segmented' ? governedInputValidator : text,
+      /workflow_revision" == "\$executing_revision|WORKFLOW_REVISION" == "\$GITHUB_SHA"/);
     assert.match(text, /scripts\/verify-deployment\.sh "\$ONPREM_TOMCAT\/billing-api" "\$/);
+    assert.match(text, /PRODUCTION_URL: \$\{\{ env\.ONPREM_TOMCAT \}\}\/billing-api\//,
+      'deployment evidence must point at the configured production target');
   });
 }
 

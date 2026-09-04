@@ -105,7 +105,7 @@ jobs:
           WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
         run: |
           set -euo pipefail
-          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] \
             || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
           [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
             || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
@@ -321,7 +321,7 @@ jobs:
           WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
         run: |
           set -euo pipefail
-          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] \
             || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
           [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
             || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
@@ -360,7 +360,7 @@ jobs:
           ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api-native.yml
           WORKFLOW_REVISION: ${{ github.sha }}
           DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
-          PRODUCTION_URL: http://127.0.0.1:8080/billing-api/
+          PRODUCTION_URL: ${{ env.ONPREM_TOMCAT }}/billing-api/
         run: |
           set -euo pipefail
           # Assert every field before publishing: a malformed record would be

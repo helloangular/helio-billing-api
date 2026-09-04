@@ -12,8 +12,9 @@
 #   → app-owner-signoff → deploy-to-preprod → smoke-and-perf-tests
 #   → prod-release-gate → deploy-to-prod → post-deploy-verify
 #
-# Helio dispatches each stage as its own run (helio_stage_id) and decides the
-# four human gates; on a plain push the whole chain runs as one pipeline.
+# Helio dispatches each provider stage as its own correlated run
+# (helio_stage_id) and decides the four human gates. For an uninterrupted
+# provider-owned run, use billing-api-native.yml instead.
 name: Billing API
 
 # Helio correlates a dispatched stage to the exact run it created by matching
@@ -23,8 +24,6 @@ name: Billing API
 run-name: ${{ inputs.helio_execution_id || format('Billing API - {0}', github.sha) }}
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       release_version:
@@ -76,21 +75,17 @@ env:
 jobs:
   build-and-package:
     name: Build & Package
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.helio_stage_id == 'build-and-package' }}
+    if: ${{ inputs.helio_execution_id != '' && inputs.helio_stage_id == 'build-and-package' }}
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate governed inputs
-        if: inputs.helio_execution_id != ''
         env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
           HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
           WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
-        run: |
-          set -euo pipefail
-          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
-            || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
-          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
-            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" build-and-package false
       - name: Build
         run: |
           echo "Building Billing API $RELEASE_VERSION"
@@ -118,11 +113,18 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'unit-tests')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'unit-tests' }}
     needs: build-and-package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" unit-tests false
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -135,11 +137,18 @@ jobs:
 
   sast-scan:
     name: SAST Scan
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sast-scan')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'sast-scan' }}
     needs: unit-tests
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" sast-scan false
       - name: Unit tests with coverage (feeds the quality gate)
         run: |
           mvn --batch-mode -q test
@@ -150,11 +159,18 @@ jobs:
 
   sca-dependency:
     name: SCA / Dependency
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sca-dependency')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'sca-dependency' }}
     needs: unit-tests
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" sca-dependency false
       - name: Trivy dependency scan and SBOM (on-premise Trivy)
         id: trivy
         run: scripts/sca-scan.sh
@@ -169,7 +185,8 @@ jobs:
 
   security-gate:
     name: Security Gate
-    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
+    # Structural DAG marker only. Helio owns this gate and never dispatches it.
+    if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'security-gate' }}
     needs: [sast-scan, sca-dependency]
     runs-on: ubuntu-latest
     steps:
@@ -178,7 +195,7 @@ jobs:
 
   deploy-to-test:
     name: Deploy to Test
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-test')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'deploy-to-test' }}
     needs: security-gate
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     environment: test
@@ -187,6 +204,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" deploy-to-test false
       - name: Resolve immutable release artifact
         id: artifact
         env:
@@ -199,7 +223,7 @@ jobs:
 
   qa-automated-tests:
     name: QA Automated Tests
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'qa-automated-tests')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'qa-automated-tests' }}
     needs: deploy-to-test
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     concurrency:
@@ -207,6 +231,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" qa-automated-tests false
       - name: HTTP end-to-end tests against the TEST environment
         env:
           QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/billing-api-test
@@ -215,7 +246,8 @@ jobs:
 
   cab-approval:
     name: CAB Approval
-    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
+    # Structural DAG marker only. Helio owns this gate and never dispatches it.
+    if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'cab-approval' }}
     needs: qa-automated-tests
     runs-on: ubuntu-latest
     steps:
@@ -224,7 +256,7 @@ jobs:
 
   deploy-to-uat:
     name: Deploy to UAT
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-uat')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'deploy-to-uat' }}
     needs: cab-approval
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     environment: uat
@@ -233,6 +265,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" deploy-to-uat false
       - name: Resolve immutable release artifact
         id: artifact
         env:
@@ -245,7 +284,7 @@ jobs:
 
   policy-evaluation:
     name: Policy Evaluation
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'policy-evaluation')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'policy-evaluation' }}
     needs: deploy-to-uat
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     concurrency:
@@ -253,6 +292,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" policy-evaluation false
       - name: Evaluate the release policy (on-premise OPA, facts from SonarQube, Trivy and UAT)
         id: policy
         run: |
@@ -270,7 +316,8 @@ jobs:
 
   app-owner-signoff:
     name: App Owner Sign-off
-    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
+    # Structural DAG marker only. Helio owns this gate and never dispatches it.
+    if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'app-owner-signoff' }}
     needs: policy-evaluation
     runs-on: ubuntu-latest
     steps:
@@ -279,7 +326,7 @@ jobs:
 
   deploy-to-preprod:
     name: Deploy to PreProd
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-preprod')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'deploy-to-preprod' }}
     needs: app-owner-signoff
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     environment: preprod
@@ -288,6 +335,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" deploy-to-preprod false
       - name: Resolve immutable release artifact
         id: artifact
         env:
@@ -300,7 +354,7 @@ jobs:
 
   smoke-and-perf-tests:
     name: Smoke + Perf Tests
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch' && success()) || (github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'smoke-and-perf-tests')) }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'smoke-and-perf-tests' }}
     needs: deploy-to-preprod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     concurrency:
@@ -308,13 +362,21 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" smoke-and-perf-tests false
       - name: Smoke and measured p95 latency against PREPROD
         id: perf
         run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/billing-api-preprod" "$RELEASE_VERSION"
 
   prod-release-gate:
     name: Prod Release Gate
-    if: ${{ github.event_name != 'workflow_dispatch' && success() }}
+    # Structural DAG marker only. Helio owns this gate and never dispatches it.
+    if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'prod-release-gate' }}
     needs: smoke-and-perf-tests
     runs-on: ubuntu-latest
     steps:
@@ -323,7 +385,7 @@ jobs:
 
   deploy-to-prod:
     name: Deploy to Prod
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.helio_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
+    if: ${{ always() && inputs.helio_execution_id != '' && (inputs.helio_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
     needs: [prod-release-gate, build-and-package]
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     environment: production
@@ -338,16 +400,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate governed inputs
-        if: inputs.helio_execution_id != ''
         env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
           HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
           WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
-        run: |
-          set -euo pipefail
-          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] \
-            || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
-          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
-            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" deploy-to-prod "$DEPLOYMENT_ONLY"
       - name: Resolve immutable release artifact
         id: artifact
         env:
@@ -383,7 +442,7 @@ jobs:
           ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api.yml
           WORKFLOW_REVISION: ${{ github.sha }}
           DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
-          PRODUCTION_URL: http://127.0.0.1:8080/billing-api/
+          PRODUCTION_URL: ${{ env.ONPREM_TOMCAT }}/billing-api/
         run: |
           set -euo pipefail
           # Assert every field before publishing: a malformed record would be
@@ -431,7 +490,7 @@ jobs:
 
   post-deploy-verify:
     name: Post-Deploy Verify
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'post-deploy-verify' }}
+    if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'post-deploy-verify' }}
     needs: deploy-to-prod
     runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
     concurrency:
@@ -439,6 +498,14 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate governed inputs
+        env:
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          HELIO_STAGE_ID: ${{ inputs.helio_stage_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: scripts/validate-governed-inputs.sh "$HELIO_EXECUTION_ID" "$HELIO_RELEASE_ID" "$HELIO_STAGE_ID" "$WORKFLOW_REVISION" "$GITHUB_SHA" post-deploy-verify "$DEPLOYMENT_ONLY"
       - name: Verify production serves the approved artifact
         env:
           EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
