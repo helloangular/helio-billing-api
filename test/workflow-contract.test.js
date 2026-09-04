@@ -56,9 +56,9 @@ test('stages that need on-premise systems run on the on-premise runner', () => {
     assert.match(jobDefinition(job), /runs-on: \[self-hosted, helio-tomcat\]/,
       `${job} needs on-premise systems and must run on the on-premise runner`);
   }
-  for (const job of ['build-and-package', 'unit-tests']) {
-    assert.match(jobDefinition(job), /runs-on: ubuntu-latest/, `${job} runs on GitHub-hosted runners`);
-  }
+  assert.match(jobDefinition('unit-tests'), /runs-on: ubuntu-latest/, 'unit-tests runs on GitHub-hosted runners');
+  assert.match(jobDefinition('build-and-package'), /runs-on: \[self-hosted, helio-tomcat\]/, 'the build publishes to the internal Nexus, so it runs on-premise');
+  assert.match(jobDefinition('build-and-package'), /scripts\/publish-artifact\.sh/, 'the build must publish to the artifact system of record');
 });
 
 test('every stage does real work and nothing is padded', () => {

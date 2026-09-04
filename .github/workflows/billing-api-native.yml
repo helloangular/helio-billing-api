@@ -75,14 +75,9 @@ jobs:
   build-and-package:
     name: Build & Package
     if: ${{ inputs.deployment_only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, helio-tomcat]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: maven
       - name: Build
         run: |
           echo "Building Billing API $RELEASE_VERSION"
@@ -91,9 +86,12 @@ jobs:
         id: digest
         run: |
           set -euo pipefail
-          digest="$(sha256sum target/billing-api.war | cut -d' ' -f1)"
+          digest="$(shasum -a 256 target/billing-api.war | awk '{print $1}')"
           echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
           echo "WAR digest sha256:$digest"
+      - name: Publish the WAR to the on-premise Nexus repository (artifact system of record)
+        id: publish
+        run: scripts/publish-artifact.sh "$RELEASE_VERSION" target/billing-api.war
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ env.RELEASE_KEY }}
@@ -159,7 +157,7 @@ jobs:
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the TEST context
         env:
           TOMCAT_CONTEXT: billing-api-test
@@ -189,7 +187,7 @@ jobs:
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the UAT context
         env:
           TOMCAT_CONTEXT: billing-api-uat
@@ -225,7 +223,7 @@ jobs:
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
       - name: Install the exact WAR into the PREPROD context
         env:
           TOMCAT_CONTEXT: billing-api-preprod
@@ -256,7 +254,7 @@ jobs:
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" | tee -a "$GITHUB_OUTPUT"
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
 
       - name: Install exact WAR and restart the production context
         id: deploy
