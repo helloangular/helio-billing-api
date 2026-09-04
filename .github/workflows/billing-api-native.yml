@@ -17,9 +17,11 @@
 #   preprod     App Owner Sign-off    (1 signature)
 #   production  Prod Release Gate     (2 signatures)
 #
-# Cloud-hosted runners build and unit-test; the on-premise runner
-# (labels: self-hosted, helio-tomcat) runs SonarQube SAST, Trivy SCA, OPA
-# policy evaluation and the Apache Tomcat environments.
+# Unit tests run on GitHub-hosted runners. Everything that must reach the
+# internal network runs on the on-premise runner (labels: self-hosted,
+# helio-tomcat): the build, which publishes the WAR to the internal Nexus
+# repository, SonarQube SAST, Trivy SCA, OPA policy evaluation and the
+# Apache Tomcat environments. Every deploy resolves the WAR from Nexus.
 name: Billing API (native)
 
 # Helio correlates the run it started by matching this run-name against the

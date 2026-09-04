@@ -1,9 +1,10 @@
 # Billing API — governed CD pipeline
 #
-# Every stage does real work. Cloud-hosted runners build and unit-test; the
+# Every stage does real work. Unit tests run on GitHub-hosted runners; the
 # on-premise runner (labels: self-hosted, helio-tomcat) runs the stages that
-# need on-premise systems: SonarQube SAST, Trivy SCA, OPA policy evaluation and
-# the Apache Tomcat environments test / uat / preprod / prod.
+# need on-premise systems: the build (publishes to the internal Nexus),
+# SonarQube SAST, Trivy SCA, OPA policy evaluation and the Apache Tomcat
+# environments test / uat / preprod / prod. Every deploy resolves from Nexus.
 #
 #   build-and-package → unit-tests → sast-scan ─┐
 #                                 → sca-dependency ┘→ security-gate → deploy-to-test
