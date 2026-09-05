@@ -3,7 +3,7 @@
   "version": "3.4.2",
   "private": true,
   "scripts": {
-    "test": "node --test src/invoice.test.js test/workflow-contract.test.js test/validate-governed-inputs.test.js",
+    "test": "node --test src/invoice.test.js test/workflow-contract.test.js test/validate-governed-inputs.test.js test/sonar-scan.test.js",
     "coverage": "mkdir -p target/coverage && node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=target/coverage/js.lcov src/invoice.test.js test/workflow-contract.test.js",
     "qa": "node --test test/qa-e2e.test.js"
   }

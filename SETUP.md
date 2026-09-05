@@ -64,6 +64,41 @@ Node 20+, Trivy, `jq`, `gh`, the deployment target, and the Nexus credential in
 `~/.helio-release-secrets/nexus-ci.token` (`user:secret`) or `NEXUS_TOKEN` in the runner's
 environment. Never put registry or scanner credentials in this repository.
 
+### SonarQube scanner resources
+
+`scripts/sonar-scan.sh` is shared by the native and segmented workflows. Its
+default scanner is CLI 8.0.1, pinned to Docker manifest digest
+`sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9`.
+The launcher heap is capped at 128 MiB, scanner-engine heap at 512 MiB, and
+JavaScript old-space at 512 MiB. These are heap budgets, **not** a total-memory
+limit. Size the runner for native overhead and concurrent services as well.
+`SONAR_SCANNER_OPTS` and `SONAR_SCANNER_JAVA_OPTS` may be explicitly overridden
+for larger projects; validate resource changes against a real full analysis.
+
+Keep headroom in the Docker VM for the scanner **in addition to** SonarQube,
+Nexus and other services. An 8 GiB VM with a Kubernetes harness can exhaust both
+memory and swap. A JavaScript bridge startup timeout followed by a missing
+module error is not sufficient evidence of a missing npm dependency: inspect
+memory pressure and the bundled analyzer before changing dependencies.
+Do not exclude JavaScript, add `continue-on-error`, or relax the quality gate to
+work around infrastructure failures. The script fails on scanner errors and
+accepts only `OK` from the quality gate for the exact completed analysis.
+
+For a Docker Desktop host with insufficient VM headroom, an administrator can
+install the official host CLI and set `SONAR_SCANNER_BIN` to its absolute
+executable path in the runner environment, then restart the idle runner. This
+is an explicit selection, not an automatic fallback after a failed scan. It
+uses the same sources, SonarQube server, analyzers and exact-analysis quality
+gate; SonarQube itself stays in Docker. A missing configured executable fails
+closed. The local Billing API runner uses this mode.
+
+Verified host distribution: [SonarScanner CLI 8.0.1.6346, requires JDK](https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.0.1.6346.zip),
+SHA-256 `8fbfb1eb546b734a60fc3e537108f06e389a8ca124fbab3a16236a8a51edcc15`.
+Compare against SonarSource's published `.zip.sha256` before extracting; do
+not download or install binaries during each release. For larger projects,
+provision a suitably sized dedicated runner rather than relying on a crowded
+demo VM. See [SonarSource scanner documentation](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/scanners/sonarscanner).
+
 ## 5. Helio side
 
 Register the GitHub Actions integration (PAT for dispatch, or the GitHub App for gates), Nexus
