@@ -1,0 +1,36 @@
+# Isolated governance/observation probe. This does not deploy an application.
+name: Adoption Governance Canary
+on:
+  push:
+    branches: [canary/helio-adoption]
+    paths: [adoption-canary-marker.txt]
+permissions:
+  contents: read
+concurrency:
+  group: adoption-governance-canary
+  cancel-in-progress: false
+jobs:
+  build:
+    name: Build probe
+    runs-on: [self-hosted, helio-tomcat]
+    timeout-minutes: 5
+    steps:
+      - name: Validate source identity
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+  approval:
+    name: Approval probe
+    needs: build
+    environment: adoption-canary-approval
+    runs-on: [self-hosted, helio-tomcat]
+    timeout-minutes: 5
+    steps:
+      - run: echo 'GitHub protection cleared. Governance probe only; no WAR deployed.'
+  verify:
+    name: Verify probe
+    needs: approval
+    runs-on: [self-hosted, helio-tomcat]
+    timeout-minutes: 5
+    steps:
+      - run: test 2 -eq $((1 + 1))
