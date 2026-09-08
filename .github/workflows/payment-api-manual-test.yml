@@ -1,0 +1,423 @@
+# Isolated manual-testing lane; uses the same reference Java WAR source as Billing.
+# GitHub environments, Nexus coordinates, Sonar project, OPA policy and Tomcat contexts are separate.
+# Payment API manual test — provider-owned CD pipeline (one run)
+#
+# All stages run as ONE GitHub Actions run:
+#
+#   build-and-package → unit-tests → sast-scan ─┐
+#                                 → sca-dependency ┘→ deploy-to-test → qa-automated-tests
+#   → deploy-to-uat → policy-evaluation → deploy-to-preprod → smoke-and-perf-tests
+#   → deploy-to-prod → post-deploy-verify
+#
+# Human approval points are the four GitHub environments (test, uat, preprod,
+# production). Each is protected by GitHub's environment rules; the approval
+# policy itself (who signs, how many signatures) is configured in the release
+# orchestrator, not in this file. Without an orchestrator, GitHub's ordinary
+# environment rules apply and the file runs unchanged.
+#
+# This is a tested reference implementation, not a drop-in production
+# workflow: runner label, deployment target and registry are repository
+# variables (see SETUP.md); the defaults below point at the reference
+# environment and must be overridden.
+#
+# Unit tests run on GitHub-hosted runners. Everything that must reach the
+# internal network runs on the on-premise runner (labels: self-hosted and the
+# HELIO_RUNNER_LABEL variable): the build, which publishes the WAR to the
+# internal Nexus repository, SonarQube SAST, Trivy SCA, OPA policy evaluation
+# and the Apache Tomcat environments. Every deploy resolves the WAR from Nexus.
+name: Payment API manual test (native)
+
+# When the release orchestrator starts the run it supplies its execution id,
+# which becomes the run name; a manual run is named after the commit.
+run-name: ${{ inputs.helio_execution_id || format('Payment API manual test (native) - {0}', github.sha) }}
+
+# Dispatch only. Every input has a default so the run can also be started by
+# hand for a rehearsal.
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version (default: derived from the commit)"
+        required: false
+        default: ''
+      artifact_digest:
+        description: Immutable sha256 digest to (re)deploy
+        required: false
+        default: ''
+      workflow_revision:
+        description: Commit SHA this deployment workflow is pinned to
+        required: false
+        default: ''
+      deployment_only:
+        description: >-
+          "true" when redeploying an already-built artifact (rollback): build,
+          tests, scans and lower environments are skipped and the pinned digest
+          is installed into production as-is.
+        required: false
+        default: 'false'
+      helio_execution_id:
+        description: Release orchestrator execution id for this run
+        required: false
+        default: ''
+      helio_release_id:
+        description: Release orchestrator release id
+        required: false
+        default: ''
+
+# One release at a time through the shared environments; a second run queues
+# behind the first instead of overwriting an environment it is still validating.
+concurrency:
+  group: payment-api-manual-test-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Versions are immutable in Nexus, so an unversioned run gets a commit-derived one.
+  RELEASE_VERSION: ${{ inputs.release_version || format('v1.0.0-manual-{0}', github.sha) }}
+  RELEASE_KEY: ${{ inputs.helio_release_id || github.run_id }}
+  # Deployment target and artifact registry as seen from the on-premise runner.
+  # Set both per repository (Settings > Variables); the defaults are the
+  # reference environment used to validate this file.
+  ONPREM_TOMCAT: ${{ vars.ONPREM_TOMCAT || 'http://127.0.0.1:8080' }}
+  NEXUS_URL: ${{ vars.NEXUS_URL || 'http://127.0.0.1:8081' }}
+
+jobs:
+  build-and-package:
+    name: Build & Package
+    if: ${{ inputs.deployment_only != 'true' }}
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate governed inputs
+        if: inputs.helio_execution_id != ''
+        env:
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] \
+            || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
+            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
+      - name: Build
+        run: |
+          echo "Building Payment API manual test $RELEASE_VERSION"
+          mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
+      - name: Record artifact digest
+        id: digest
+        run: |
+          set -euo pipefail
+          digest="$(shasum -a 256 target/billing-api.war | awk '{print $1}')"
+          echo "artifact_digest=sha256:$digest" >> "$GITHUB_OUTPUT"
+          echo "WAR digest sha256:$digest"
+      - name: Publish the WAR to the on-premise Nexus repository (artifact system of record)
+        id: publish
+        run: bash scripts/payment-manual/publish-artifact.sh "$RELEASE_VERSION" target/billing-api.war
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # Nexus is the system of record; copy to GitHub only when the
+        # repository variable KEEP_GITHUB_ARTIFACTS allows binaries to leave the boundary.
+        if: ${{ vars.KEEP_GITHUB_ARTIFACTS == 'true' }}
+        with:
+          name: package-${{ env.RELEASE_KEY }}
+          path: target/billing-api.war
+          retention-days: 90
+    outputs:
+      artifact_digest: ${{ steps.digest.outputs.artifact_digest }}
+
+  unit-tests:
+    name: Unit Tests
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: '20' }
+      - name: Java and JavaScript unit tests
+        run: mvn --batch-mode test && npm test && node --test test/payment-manual-workflow.test.js
+
+  sast-scan:
+    name: SAST Scan
+    needs: unit-tests
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests with coverage (feeds the quality gate)
+        run: |
+          mvn --batch-mode -q test
+          npm run coverage
+      - name: SonarQube analysis and quality gate (on-premise SonarQube)
+        run: bash scripts/payment-manual/sonar-scan.sh "$RELEASE_VERSION"
+
+  sca-dependency:
+    name: SCA / Dependency
+    needs: unit-tests
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy dependency scan and SBOM (on-premise Trivy)
+        run: scripts/sca-scan.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # Nexus is the system of record; copy to GitHub only when the
+        # repository variable KEEP_GITHUB_ARTIFACTS allows evidence to leave the boundary.
+        if: ${{ always() && vars.KEEP_GITHUB_ARTIFACTS == 'true' }}
+        with:
+          name: sbom-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/sca
+          retention-days: 90
+
+  # Entering "test" is the first approval point: GitHub holds this job until
+  # the environment's protection rule is satisfied.
+  deploy-to-test:
+    name: Deploy to Test
+    needs: [sast-scan, sca-dependency]
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    environment: payment-manual-test
+    concurrency:
+      group: payment-api-manual-test-test
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/payment-manual/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the TEST context
+        env:
+          TOMCAT_CONTEXT: payment-api-manual-test-test
+        run: bash scripts/payment-manual/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  qa-automated-tests:
+    name: QA Automated Tests
+    needs: deploy-to-test
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: payment-api-manual-test-test
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: HTTP end-to-end tests against the TEST environment
+        env:
+          QA_TARGET_URL: ${{ env.ONPREM_TOMCAT }}/payment-api-manual-test-test
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+        run: npm run qa
+
+  # Entering "uat" is the CAB Approval gate.
+  deploy-to-uat:
+    name: Deploy to UAT
+    needs: qa-automated-tests
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    environment: payment-manual-uat
+    concurrency:
+      group: payment-api-manual-test-uat
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/payment-manual/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the UAT context
+        env:
+          TOMCAT_CONTEXT: payment-api-manual-test-uat
+        run: bash scripts/payment-manual/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  policy-evaluation:
+    name: Policy Evaluation
+    needs: deploy-to-uat
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: payment-api-manual-test-uat
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Evaluate the release policy (on-premise OPA, facts from SonarQube, Trivy and UAT)
+        run: |
+          set -euo pipefail
+          digest="$(curl --fail --silent --max-time 5 "$ONPREM_TOMCAT/payment-api-manual-test-uat/artifact-digest")"
+          bash scripts/payment-manual/opa-policy-check.sh "$digest" "$RELEASE_KEY" preprod "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # Nexus is the system of record; copy to GitHub only when the
+        # repository variable KEEP_GITHUB_ARTIFACTS allows evidence to leave the boundary.
+        if: ${{ always() && vars.KEEP_GITHUB_ARTIFACTS == 'true' }}
+        with:
+          name: policy-decision-${{ env.RELEASE_KEY }}-${{ github.run_id }}
+          path: target/policy
+          retention-days: 90
+
+  # Entering "preprod" is the App Owner Sign-off gate.
+  deploy-to-preprod:
+    name: Deploy to PreProd
+    needs: policy-evaluation
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    environment: payment-manual-preprod
+    concurrency:
+      group: payment-api-manual-test-preprod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/payment-manual/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
+      - name: Install the exact WAR into the PREPROD context
+        env:
+          TOMCAT_CONTEXT: payment-api-manual-test-preprod
+        run: bash scripts/payment-manual/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}"
+
+  smoke-and-perf-tests:
+    name: Smoke + Perf Tests
+    needs: deploy-to-preprod
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: payment-api-manual-test-preprod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Smoke and measured p95 latency against PREPROD
+        run: scripts/smoke-perf.sh "$ONPREM_TOMCAT/payment-api-manual-test-preprod" "$RELEASE_VERSION"
+
+  # Entering "production" is the final approval point.
+  # On a rollback (deployment_only=true) every job above is skipped and this
+  # is the first job that runs, so it must tolerate skipped prerequisites but
+  # never a failed or cancelled one.
+  deploy-to-prod:
+    name: Deploy to Prod
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [smoke-and-perf-tests, build-and-package]
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    environment: payment-manual-production
+    # Publishing deployment evidence is a write; only this job may do it.
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+    concurrency:
+      group: payment-api-manual-test-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate governed inputs
+        if: inputs.helio_execution_id != ''
+        env:
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] \
+            || { echo "helio_release_id is required on a governed run" >&2; exit 1; }
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]] \
+            || { echo "workflow_revision '$WORKFLOW_REVISION' must equal the executing commit $GITHUB_SHA" >&2; exit 1; }
+      - name: Resolve immutable release artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/payment-manual/resolve-artifact.sh "$RELEASE_KEY" "${{ inputs.artifact_digest }}" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install exact WAR and restart the production context
+        id: deploy
+        env:
+          TOMCAT_CONTEXT: payment-api-manual-test
+        run: bash scripts/payment-manual/deploy-tomcat.sh "${{ steps.artifact.outputs.artifact_digest }}" "${{ steps.artifact.outputs.package_path }}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Bind serving WAR identity
+        id: identity
+        env:
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
+        run: |
+          set -euo pipefail
+          echo "artifact_uri=payment-api-manual-test-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # Immutable GitHub deployment record of what was deployed, for audit.
+      # Only on an orchestrated run: a manual rehearsal has no release to bind to.
+      - name: Publish immutable release deployment evidence
+        if: inputs.helio_execution_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          ARTIFACT_URI: ${{ steps.identity.outputs.artifact_uri }}
+          ROLLBACK_WORKFLOW_ID: .github/workflows/payment-api-manual-test.yml
+          WORKFLOW_REVISION: ${{ github.sha }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+          PRODUCTION_URL: ${{ env.ONPREM_TOMCAT }}/payment-api-manual-test/
+        run: |
+          set -euo pipefail
+          # Assert every field before publishing: a malformed record would be
+          # read back as proof.
+          [[ -n "$HELIO_EXECUTION_ID" ]]
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ROLLBACK_WORKFLOW_ID" =~ ^\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml$ ]]
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$DEPLOYMENT_ONLY" == "true" ]]; then
+            deployment_task="helio-rollback"
+          else
+            deployment_task="helio-forward-release"
+          fi
+
+          jq -n \
+            --arg ref "$GITHUB_SHA" \
+            --arg execution_id "$HELIO_EXECUTION_ID" \
+            --arg release_id "$HELIO_RELEASE_ID" \
+            --arg artifact_uri "$ARTIFACT_URI" \
+            --arg artifact_digest "$ARTIFACT_DIGEST" \
+            --arg rollback_workflow_id "$ROLLBACK_WORKFLOW_ID" \
+            --arg workflow_revision "$WORKFLOW_REVISION" \
+            --arg task "$deployment_task" \
+            '{ref:$ref, auto_merge:false, required_contexts:[],
+              environment:"payment-manual-production", task:$task,
+              payload:{schema_version:1,
+                       helio_execution_id:$execution_id,
+                       release_id:$release_id,
+                       artifact_uri:$artifact_uri,
+                       artifact_digest:$artifact_digest,
+                       rollback_workflow_id:$rollback_workflow_id,
+                       workflow_revision:$workflow_revision}}' \
+            > deployment-evidence.json
+
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            --input deployment-evidence.json --jq .id)"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=success \
+            -f description="Immutable WAR is serving from Apache Tomcat" \
+            -f environment_url="$PRODUCTION_URL" \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+    outputs:
+      artifact_digest: ${{ steps.artifact.outputs.artifact_digest }}
+
+  post-deploy-verify:
+    name: Post-Deploy Verify
+    # On a rollback every job before production is skipped; GitHub's default
+    # condition treats a skipped ancestor as failure, so verify explicitly
+    # whenever production itself deployed.
+    if: ${{ !cancelled() && needs.deploy-to-prod.result == 'success' }}
+    needs: deploy-to-prod
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    concurrency:
+      group: payment-api-manual-test-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify production serves the approved artifact
+        env:
+          EXPECTED_DIGEST: ${{ inputs.artifact_digest || needs.deploy-to-prod.outputs.artifact_digest }}
+          EXPECTED_VERSION: ${{ env.RELEASE_VERSION }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: |
+          set -euo pipefail
+          # A rollback redeploys an older version: verify the digest only.
+          [[ "$DEPLOYMENT_ONLY" == "true" ]] && EXPECTED_VERSION=""
+          scripts/verify-deployment.sh "$ONPREM_TOMCAT/payment-api-manual-test" "$EXPECTED_DIGEST" "$EXPECTED_VERSION"
