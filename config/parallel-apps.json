@@ -1,0 +1,42 @@
+[
+  {
+    "slug": "orders-api-parallel-test",
+    "name": "Orders API Parallel Test"
+  },
+  {
+    "slug": "inventory-api-parallel-test",
+    "name": "Inventory API Parallel Test"
+  },
+  {
+    "slug": "shipping-api-parallel-test",
+    "name": "Shipping API Parallel Test"
+  },
+  {
+    "slug": "customer-api-parallel-test",
+    "name": "Customer API Parallel Test"
+  },
+  {
+    "slug": "catalog-api-parallel-test",
+    "name": "Catalog API Parallel Test"
+  },
+  {
+    "slug": "pricing-api-parallel-test",
+    "name": "Pricing API Parallel Test"
+  },
+  {
+    "slug": "notification-api-parallel-test",
+    "name": "Notification API Parallel Test"
+  },
+  {
+    "slug": "reporting-api-parallel-test",
+    "name": "Reporting API Parallel Test"
+  },
+  {
+    "slug": "settlement-api-parallel-test",
+    "name": "Settlement API Parallel Test"
+  },
+  {
+    "slug": "audit-api-parallel-test",
+    "name": "Audit API Parallel Test"
+  }
+]
