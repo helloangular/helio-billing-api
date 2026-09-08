@@ -120,3 +120,24 @@ activates Datadog only after the selector returns at least one monitor.
 - Every segmented stage validates its Helio execution ID, release ID and exact stage ID.
 - The segmented workflow has no push path; an uncorrelated manual dispatch cannot deploy.
 - Post-deployment verification compares the serving digest and version with the approved artifact.
+# Fast App acceptance pipeline
+
+`billing-api-app-canary.yml` is a dispatch-only acceptance workflow: **Build →
+Approval → Deploy & Verify**. The approval is GitHub's production environment
+hold, not a dummy job; the file therefore has two executing jobs. It uses the
+same Nexus repository and local Tomcat scripts as the full Billing API workflow.
+It shares the full workflow's release/environment concurrency groups, so the
+tests cannot safely run against the same Tomcat target at the same time.
+
+Create its release in Helio with **Run provider pipeline as-is → Govern existing
+environment promotions**. Pin production to **two independent signatures with
+separation of duties** and the dedicated reviewer user. Keep that user as the
+sole required reviewer, with administrator bypass disabled. Selecting Observe
+only does not enforce Helio signatures. The dispatcher may be the App; the
+reviewer must remain a separate GitHub user credential.
+
+Rollback skips the build, resolves the approved Nexus digest, and deploys and
+verifies it under one environment lock. Helio's approved back-out plan and
+rollback signatures are still required. No artifact uploads to GitHub are made.
+This short workflow is for iteration, not a substitute for full forward/backout
+qualification. Live App acceptance remains pending until recorded by Helio.

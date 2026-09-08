@@ -1,0 +1,144 @@
+# Local acceptance reference: Build → Helio approval → Deploy & Verify.
+# Two GitHub jobs plus the production environment hold form three logical stages.
+# Configure Helio govern_environments with two independent signatures and SoD.
+# YAML alone cannot enforce two signatures: production's sole required reviewer
+# must be the dedicated Helio reviewer user, with administrator bypass disabled.
+name: Billing API (App canary)
+run-name: ${{ inputs.helio_execution_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Unique Nexus version for forward releases
+        required: true
+        type: string
+      helio_execution_id:
+        description: Helio correlation identity
+        required: true
+        type: string
+      helio_release_id:
+        description: Helio release UUID
+        required: true
+        type: string
+      workflow_revision:
+        description: Exact executing commit
+        required: true
+        type: string
+      artifact_digest:
+        description: Approved immutable rollback digest
+        required: false
+        default: ''
+        type: string
+      deployment_only:
+        description: Redeploy the approved artifact without rebuilding
+        required: false
+        default: 'false'
+        type: string
+concurrency:
+  group: billing-api-release
+  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: read
+env:
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  RELEASE_KEY: ${{ inputs.helio_release_id }}
+  NEXUS_URL: ${{ vars.NEXUS_URL || 'http://127.0.0.1:8081' }}
+  ONPREM_TOMCAT: ${{ vars.ONPREM_TOMCAT || 'http://127.0.0.1:8080' }}
+jobs:
+  build-and-package:
+    name: Build & Package
+    if: ${{ inputs.deployment_only != 'true' }}
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate immutable governed inputs before building
+        env:
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+        run: |
+          set -euo pipefail
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]]
+          [[ "$RELEASE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+      - name: Build tested Java WAR
+        run: mvn --batch-mode -Drelease.version="$RELEASE_VERSION" clean package
+      - name: Publish immutable WAR to Nexus
+        run: scripts/publish-artifact.sh "$RELEASE_VERSION" target/billing-api.war
+
+  deploy-and-verify:
+    name: Deploy & Verify
+    needs: build-and-package
+    if: ${{ always() && !cancelled() && (needs.build-and-package.result == 'success' || inputs.deployment_only == 'true') }}
+    environment: production
+    runs-on: [self-hosted, "${{ vars.HELIO_RUNNER_LABEL || 'helio-tomcat' }}"]
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+    concurrency:
+      group: billing-api-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate exact workflow and rollback target
+        env:
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          WORKFLOW_REVISION: ${{ inputs.workflow_revision }}
+          EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: |
+          set -euo pipefail
+          [[ "$HELIO_RELEASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]
+          [[ "$WORKFLOW_REVISION" == "$GITHUB_SHA" ]]
+          [[ "$DEPLOYMENT_ONLY" == 'false' || "$DEPLOYMENT_ONLY" == 'true' ]]
+          if [[ "$DEPLOYMENT_ONLY" == 'true' ]]; then [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; fi
+      - name: Resolve approved artifact from Nexus
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
+        run: scripts/resolve-artifact.sh "$RELEASE_KEY" "$EXPECTED_DIGEST" "$RELEASE_VERSION" | tee -a "$GITHUB_OUTPUT"
+      - name: Deploy and verify exact serving bytes under the same environment lock
+        id: deploy
+        env:
+          EXPECTED_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          PACKAGE_PATH: ${{ steps.artifact.outputs.package_path }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/tomcat-canary-$GITHUB_RUN_ID.out"
+          scripts/deploy-tomcat.sh "$EXPECTED_DIGEST" "$PACKAGE_PATH" | tee "$result"
+          cat "$result" >> "$GITHUB_OUTPUT"
+          deployed_version="$(sed -n 's/^deployed_version=//p' "$result")"
+          [[ -n "$deployed_version" ]]
+          if [[ "$DEPLOYMENT_ONLY" != 'true' ]]; then [[ "$deployed_version" == "$RELEASE_VERSION" ]]; fi
+          scripts/verify-deployment.sh "$ONPREM_TOMCAT/billing-api" "$EXPECTED_DIGEST" "$deployed_version"
+      - name: Publish immutable release deployment evidence after verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
+          HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          DEPLOYED_VERSION: ${{ steps.deploy.outputs.deployed_version }}
+          DEPLOYMENT_ONLY: ${{ inputs.deployment_only }}
+          ROLLBACK_WORKFLOW_ID: .github/workflows/billing-api-app-canary.yml
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          task='helio-forward-release'
+          [[ "$DEPLOYMENT_ONLY" == 'true' ]] && task='helio-rollback'
+          jq -n --arg ref "$GITHUB_SHA" --arg task "$task" \
+            --arg execution "$HELIO_EXECUTION_ID" --arg release "$HELIO_RELEASE_ID" \
+            --arg uri "billing-api-${DEPLOYED_VERSION}.war@${ARTIFACT_DIGEST}" \
+            --arg digest "$ARTIFACT_DIGEST" --arg rollback "$ROLLBACK_WORKFLOW_ID" \
+            '{ref:$ref,auto_merge:false,required_contexts:[],environment:"production",task:$task,
+              payload:{schema_version:1,helio_execution_id:$execution,release_id:$release,
+                artifact_uri:$uri,artifact_digest:$digest,rollback_workflow_id:$rollback,workflow_revision:$ref}}' \
+            > "$RUNNER_TEMP/canary-evidence-$GITHUB_RUN_ID.json"
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            --input "$RUNNER_TEMP/canary-evidence-$GITHUB_RUN_ID.json" --jq .id)"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=success -f description='Nexus WAR serving digest and version verified on Tomcat' \
+            -f environment_url="$ONPREM_TOMCAT/billing-api/" \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null

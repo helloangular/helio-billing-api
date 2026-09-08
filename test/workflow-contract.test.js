@@ -6,6 +6,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+test('App canary has one protected deploy, real verification and rollback without rebuild', () => {
+  const canary = fs.readFileSync(path.join(__dirname, '..', '.github/workflows/billing-api-app-canary.yml'), 'utf8');
+  assert.deepEqual([...canary.matchAll(/^  ([a-z][a-z-]+):$/gm)].map(x => x[1]).filter(x => x !== 'workflow-dispatch'),
+    ['build-and-package', 'deploy-and-verify']);
+  assert.match(canary, /environment: production/);
+  assert.match(canary, /needs: build-and-package/);
+  assert.match(canary, /needs\.build-and-package\.result == 'success'/);
+  assert.match(canary, /inputs\.deployment_only == 'true'/);
+  assert.match(canary, /scripts\/publish-artifact\.sh/);
+  assert.match(canary, /scripts\/verify-deployment\.sh/);
+  assert.match(canary, /group: billing-api-release/);
+  assert.match(canary, /cancel-in-progress: false/);
+  assert.doesNotMatch(canary, /upload-artifact@|helio_stage_id/);
+  assert.match(canary, /two independent signatures/);
+});
+
 const workflow = fs.readFileSync(
   path.join(__dirname, '..', '.github', 'workflows', 'billing-api.yml'),
   'utf8'
