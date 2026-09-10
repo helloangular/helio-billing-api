@@ -30,7 +30,8 @@ test('qualification lanes have isolated eight-job workflows and destinations', (
     const accepted = spawnSync('bash', ['-c', 'source scripts/parallel-apps/identity.sh'], {env: {...process.env, APP_SLUG: slug}});
     assert.equal(accepted.status, 0);
     const rejected = spawnSync('bash', ['scripts/parallel-apps/deploy-tomcat.sh', 'sha256:'+'a'.repeat(64)],
-      {env: {...process.env, APP_SLUG: slug, TOMCAT_CONTEXT: 'billing-api'}, encoding: 'utf8'});
+      {env: {...process.env, APP_SLUG: slug, TOMCAT_CONTEXT: 'billing-api',
+             CATALINA_HOME: '/nonexistent/qualification-test-tomcat'}, encoding: 'utf8'});
     assert.equal(rejected.status, 2);
     assert.match(rejected.stderr, /unknown Tomcat context/);
   }
