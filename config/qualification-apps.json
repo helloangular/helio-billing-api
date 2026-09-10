@@ -1,0 +1,18 @@
+[
+  {
+    "slug": "overnight-api-qualification",
+    "name": "Overnight API Qualification"
+  },
+  {
+    "slug": "recovery-api-qualification",
+    "name": "Recovery API Qualification"
+  },
+  {
+    "slug": "approval-failure-api-qualification",
+    "name": "Approval Failure API Qualification"
+  },
+  {
+    "slug": "backout-api-qualification",
+    "name": "Backout API Qualification"
+  }
+]
