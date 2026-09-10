@@ -23,6 +23,7 @@ test('qualification lanes have isolated eight-job workflows and destinations', (
     assert(yaml.includes(`TOMCAT_CONTEXT: ${slug}-test\n`));
     assert(yaml.includes(`ROLLBACK_WORKFLOW_ID: .github/workflows/${slug}.yml`));
     assert(yaml.includes('needs: [sast-scan, sca-dependency]'));
+    assert(yaml.includes('bash scripts/qualification/sca-scan.sh'));
     assert(yaml.includes("needs.deploy-to-prod.result == 'success'"));
     assert(!/^  (push|schedule|pull_request):/m.test(yaml));
     assert(!yaml.includes('orders-api-parallel-test'));
