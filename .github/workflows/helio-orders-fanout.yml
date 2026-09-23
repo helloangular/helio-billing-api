@@ -1,0 +1,40 @@
+# Caller for the Helio central fan-out template. Starts on push to main (demo
+# folder only) or when Helio dispatches a release; either way it deploys to
+# exactly the environments the Helio Environment Catalog approved.
+name: Helio Orders Fan-out
+
+run-name: ${{ inputs.helio_execution_id || format('Helio Orders Fan-out - {0}', github.sha) }}
+
+on:
+  push:
+    branches: [main]
+    paths: ['fanout-demo/**']
+  workflow_dispatch:
+    inputs:
+      release_version:
+        required: false
+        default: ''
+      artifact_digest:
+        required: false
+        default: ''
+      workflow_revision:
+        required: false
+        default: ''
+      deployment_only:
+        required: false
+        default: 'false'
+      helio_execution_id:
+        required: false
+        default: ''
+      helio_release_id:
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: helloangular/helio-billing-api/.github/workflows/helio-fanout-deploy.yml@main
+    with:
+      helio_execution_id: ${{ inputs.helio_execution_id || '' }}
