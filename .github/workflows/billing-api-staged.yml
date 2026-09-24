@@ -12,7 +12,9 @@
 # real GitHub deployment record, the evidence Helio reads back.
 #
 # Dispatch-only: Helio dispatches one stage per run (helio_stage_id); gates are
-# decided in Helio and never run here.
+# decided in Helio and never run here. PreProd deploys to its own GitHub
+# environment (preprod-staged): the repository's preprod environment is an
+# Environment Catalog stage of the fan-out pipeline.
 name: Billing API (staged)
 
 run-name: ${{ inputs.helio_execution_id || format('Billing API (staged) - {0}', github.sha) }}
@@ -251,7 +253,7 @@ jobs:
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-preprod' }}
     needs: app-owner-signoff
     runs-on: ubuntu-latest
-    environment: preprod
+    environment: preprod-staged
     permissions:
       contents: read
       actions: read
@@ -264,7 +266,7 @@ jobs:
       - name: Deploy and publish evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_ENVIRONMENT: preprod
+          TARGET_ENVIRONMENT: preprod-staged
           HELIO_EXECUTION_ID: ${{ inputs.helio_execution_id }}
           HELIO_RELEASE_ID: ${{ inputs.helio_release_id }}
           EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
