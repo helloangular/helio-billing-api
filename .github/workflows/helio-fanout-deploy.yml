@@ -13,18 +13,24 @@ on:
         type: string
         required: false
         default: ''
+      # Set by Helio for a redeploy or rollback of one environment; empty for
+      # releases and pushes, which fan out to the whole approved plan.
+      helio_target_environment:
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
   qa:
-    if: ${{ vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'qa') }}
+    if: ${{ vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'qa') && (inputs.helio_target_environment == '' || contains(fromJSON(vars.HELIO_ENVIRONMENTS).qa, inputs.helio_target_environment)) }}
     name: qa (${{ matrix.environment }})
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).qa }}
+        environment: ${{ inputs.helio_target_environment != '' && fromJSON(format('["{0}"]', inputs.helio_target_environment)) || fromJSON(vars.HELIO_ENVIRONMENTS).qa }}
     environment: ${{ matrix.environment }}
     runs-on: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).runs_on[matrix.environment] }}
     concurrency:
@@ -40,12 +46,12 @@ jobs:
 
   preprod:
     needs: [qa]
-    if: ${{ !failure() && !cancelled() && vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'preprod') }}
+    if: ${{ !failure() && !cancelled() && vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'preprod') && (inputs.helio_target_environment == '' || contains(fromJSON(vars.HELIO_ENVIRONMENTS).preprod, inputs.helio_target_environment)) }}
     name: preprod (${{ matrix.environment }})
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).preprod }}
+        environment: ${{ inputs.helio_target_environment != '' && fromJSON(format('["{0}"]', inputs.helio_target_environment)) || fromJSON(vars.HELIO_ENVIRONMENTS).preprod }}
     environment: ${{ matrix.environment }}
     runs-on: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).runs_on[matrix.environment] }}
     concurrency:
@@ -66,12 +72,12 @@ jobs:
 
   production:
     needs: [preprod]
-    if: ${{ !failure() && !cancelled() && vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'production') }}
+    if: ${{ !failure() && !cancelled() && vars.HELIO_ENVIRONMENTS != '' && contains(fromJSON(vars.HELIO_ENVIRONMENTS).order, 'production') && (inputs.helio_target_environment == '' || contains(fromJSON(vars.HELIO_ENVIRONMENTS).production, inputs.helio_target_environment)) }}
     name: production (${{ matrix.environment }})
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).production }}
+        environment: ${{ inputs.helio_target_environment != '' && fromJSON(format('["{0}"]', inputs.helio_target_environment)) || fromJSON(vars.HELIO_ENVIRONMENTS).production }}
     environment: ${{ matrix.environment }}
     runs-on: ${{ fromJSON(vars.HELIO_ENVIRONMENTS).runs_on[matrix.environment] }}
     concurrency:
