@@ -1,0 +1,54 @@
+# Mixed release: a team QA environment the team owns, then the Helio central
+# fan-out template for the catalog stages. Helio takes team-qa's approvers from
+# onboarding and every catalog environment's approvers from the Environment
+# Catalog, in one release (docs/Env-Catalog-Mixed-Workflows-Design.md).
+name: Helio Orders Mixed
+
+run-name: ${{ inputs.helio_execution_id || format('Helio Orders Mixed - {0}', github.sha) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        required: false
+        default: ''
+      artifact_digest:
+        required: false
+        default: ''
+      workflow_revision:
+        required: false
+        default: ''
+      deployment_only:
+        required: false
+        default: 'false'
+      helio_execution_id:
+        required: false
+        default: ''
+      helio_release_id:
+        required: false
+        default: ''
+      helio_target_environment:
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  team-qa:
+    name: Team QA
+    runs-on: ubuntu-latest
+    environment: team-qa
+    concurrency:
+      group: helio-env-team-qa
+      cancel-in-progress: false
+    steps:
+      - name: Deploy to team QA and run the QA suite
+        run: echo "Deploying ${GITHUB_SHA} to team-qa and running the QA suite"
+
+  deploy:
+    needs: [team-qa]
+    uses: helloangular/helio-billing-api/.github/workflows/helio-fanout-deploy.yml@main
+    with:
+      helio_execution_id: ${{ inputs.helio_execution_id || '' }}
+      helio_target_environment: ${{ inputs.helio_target_environment || '' }}
