@@ -29,6 +29,9 @@ on:
       helio_release_id:
         required: false
         default: ''
+      helio_target_environment:
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -38,3 +41,4 @@ jobs:
     uses: helloangular/helio-billing-api/.github/workflows/helio-fanout-deploy.yml@main
     with:
       helio_execution_id: ${{ inputs.helio_execution_id || '' }}
+      helio_target_environment: ${{ inputs.helio_target_environment || '' }}
