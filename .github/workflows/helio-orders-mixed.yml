@@ -37,6 +37,9 @@ permissions:
 jobs:
   team-qa:
     name: Team QA
+    # Full releases only: a redeploy or rollback of one catalog environment
+    # (helio_target_environment set) must not touch team QA.
+    if: ${{ inputs.helio_target_environment == '' }}
     runs-on: ubuntu-latest
     environment: team-qa
     concurrency:
@@ -48,6 +51,8 @@ jobs:
 
   deploy:
     needs: [team-qa]
+    # Still runs when team QA is skipped for a single-environment operation.
+    if: ${{ !failure() && !cancelled() }}
     uses: helloangular/helio-billing-api/.github/workflows/helio-fanout-deploy.yml@main
     with:
       helio_execution_id: ${{ inputs.helio_execution_id || '' }}
