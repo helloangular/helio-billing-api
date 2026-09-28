@@ -70,7 +70,7 @@ jobs:
   build-and-package:
     name: Build & Package
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'build-and-package' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - uses: actions/checkout@v4
       - name: Package the commit deterministically
@@ -84,7 +84,7 @@ jobs:
     name: Unit Tests
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'unit-tests' }}
     needs: build-and-package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Unit tests for $RELEASE_VERSION passed (412 tests)" && sleep 5
@@ -93,7 +93,7 @@ jobs:
     name: SAST Scan
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sast-scan' }}
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "SAST scan of $RELEASE_VERSION: 0 critical, 0 high" && sleep 5
@@ -102,7 +102,7 @@ jobs:
     name: SCA / Dependency
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'sca-dependency' }}
     needs: unit-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Dependency scan of $RELEASE_VERSION: no known vulnerable components" && sleep 5
@@ -111,7 +111,7 @@ jobs:
     name: Security Gate
     if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: [sast-scan, sca-dependency]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Decided in Helio"
@@ -120,7 +120,7 @@ jobs:
     name: Deploy to Test
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-test' }}
     needs: security-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     environment: test
     permissions:
       contents: read
@@ -168,7 +168,7 @@ jobs:
     name: QA Automated Tests
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'qa-automated-tests' }}
     needs: deploy-to-test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "QA suite against test for $RELEASE_VERSION passed (86 scenarios)" && sleep 5
@@ -177,7 +177,7 @@ jobs:
     name: CAB Approval
     if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: qa-automated-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Decided in Helio"
@@ -186,7 +186,7 @@ jobs:
     name: Deploy to UAT
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-uat' }}
     needs: cab-approval
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     environment: uat
     permissions:
       contents: read
@@ -234,7 +234,7 @@ jobs:
     name: Policy Evaluation
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'policy-evaluation' }}
     needs: deploy-to-uat
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Release policy evaluation for $RELEASE_VERSION: compliant" && sleep 5
@@ -243,7 +243,7 @@ jobs:
     name: App Owner Sign-off
     if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: policy-evaluation
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Decided in Helio"
@@ -252,7 +252,7 @@ jobs:
     name: Deploy to PreProd
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'deploy-to-preprod' }}
     needs: app-owner-signoff
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     environment: preprod-staged
     permissions:
       contents: read
@@ -300,7 +300,7 @@ jobs:
     name: Smoke + Perf Tests
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'smoke-and-perf-tests' }}
     needs: deploy-to-preprod
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Smoke and performance tests on preprod for $RELEASE_VERSION passed (p95 182 ms)" && sleep 5
@@ -309,7 +309,7 @@ jobs:
     name: Prod Release Gate
     if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: smoke-and-perf-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Decided in Helio"
@@ -318,7 +318,7 @@ jobs:
     name: Deploy to Prod
     if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.helio_stage_id == 'deploy-to-prod' || inputs.deployment_only == 'true') }}
     needs: [prod-release-gate, build-and-package]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     environment: production
     permissions:
       contents: read
@@ -366,7 +366,7 @@ jobs:
     name: Post-Deploy Verify
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.helio_stage_id == 'post-deploy-verify' }}
     needs: deploy-to-prod
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - run: |
           echo "Production serves Billing API $RELEASE_VERSION; health checks green" && sleep 5

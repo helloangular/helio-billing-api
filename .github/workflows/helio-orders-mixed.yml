@@ -40,7 +40,7 @@ jobs:
     # Full releases only: a redeploy or rollback of one catalog environment
     # (helio_target_environment set) must not touch team QA.
     if: ${{ inputs.helio_target_environment == '' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     environment: team-qa
     concurrency:
       group: helio-env-team-qa
