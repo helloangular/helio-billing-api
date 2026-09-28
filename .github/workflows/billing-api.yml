@@ -115,7 +115,7 @@ jobs:
     name: Unit Tests
     if: ${{ always() && inputs.helio_execution_id != '' && inputs.helio_stage_id == 'unit-tests' }}
     needs: build-and-package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate governed inputs
@@ -188,7 +188,7 @@ jobs:
     # Structural DAG marker only. Helio owns this gate and never dispatches it.
     if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'security-gate' }}
     needs: [sast-scan, sca-dependency]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - name: Handoff to Helio approval gate
         run: echo "SAST + SCA complete — Security Gate is decided by a human in Helio"
@@ -249,7 +249,7 @@ jobs:
     # Structural DAG marker only. Helio owns this gate and never dispatches it.
     if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'cab-approval' }}
     needs: qa-automated-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - name: Handoff to Helio approval gate
         run: echo "QA complete — CAB Approval is decided by a human in Helio"
@@ -319,7 +319,7 @@ jobs:
     # Structural DAG marker only. Helio owns this gate and never dispatches it.
     if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'app-owner-signoff' }}
     needs: policy-evaluation
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - name: Handoff to Helio approval gate
         run: echo "Policy evaluated — App Owner Sign-off is decided by a human in Helio"
@@ -378,7 +378,7 @@ jobs:
     # Structural DAG marker only. Helio owns this gate and never dispatches it.
     if: ${{ inputs.helio_execution_id == '' && inputs.helio_stage_id == 'prod-release-gate' }}
     needs: smoke-and-perf-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - name: Handoff to Helio approval gate
         run: echo "PreProd verified — Prod Release Gate is decided by a human in Helio"

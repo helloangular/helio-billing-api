@@ -119,7 +119,7 @@ jobs:
     name: Prod Release Gate
     if: ${{ github.event_name != 'workflow_dispatch' && success() }}
     needs: build-and-package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, helio-ci]
     steps:
       - name: Handoff to Helio approval gate
         run: echo "PreProd verified — Prod Release Gate is decided by a human in Helio"
